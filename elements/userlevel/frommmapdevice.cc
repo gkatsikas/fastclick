@@ -53,14 +53,6 @@
 
 CLICK_DECLS
 
-static sig_atomic_t sigint = 0;
-
-static void sighandler(int num)
-{
-	click_chatter("Caught SIGINT");
-	sigint = 1;
-}
-
 FromMMapDevice::FromMMapDevice()
 	:	_task(this), _packets_total(0), _bytes_total(0), _burst_size(32)
 {
@@ -73,9 +65,6 @@ FromMMapDevice::FromMMapDevice()
 	_numa = false;
 #endif
 	_nb_blocks = MMapDevice::NB_BLOCKS;
-
-//	signal(SIGINT, sighandler);
-	click_signal(SIGINT, sighandler, true);
 }
 
 FromMMapDevice::~FromMMapDevice()
@@ -256,8 +245,7 @@ FromMMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring) {
 	counter_t recv_pkts  = 0;
 	counter_t recv_bytes = 0;
 
-//	while (1) {
-	while ( !sigint ) {
+	while (1) {
 
 		while (
 			MMapDevice::rx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) && (recv_pkts < burst_size)
@@ -287,12 +275,12 @@ FromMMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring) {
 				default:
 					return;
 			}
-		
+
 			WritablePacket *p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
 			p->timestamp_anno().set_timeval_ioctl(ring->sock_fd, SIOCGSTAMP);
 			p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
 			p->set_mac_header(p->data());
-			
+
 			// Aggregate input packets in a batch list
 			if (head == NULL)
 				head = PacketBatch::start_head(p);
@@ -312,7 +300,7 @@ FromMMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring) {
 		if ( head ) {
 			head->make_tail(last, recv_pkts);
 			output_push_batch(0, head);
-			
+
 		//	info->update_rx_info(recv_pkts, recv_bytes);
 		//	click_chatter("[%s] [Rx thread] PUSH %d packets (%d bytes)\n", ifname.c_str(), recv_pkts, recv_bytes);
 

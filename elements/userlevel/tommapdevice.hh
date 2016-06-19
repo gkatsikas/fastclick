@@ -58,9 +58,9 @@ class ToMMapDevice : public QueueDevice { public:
 	int    configure_phase() const 	{ return CONFIGURE_PHASE_PRIVILEGED; }
 //	bool can_live_reconfigure() const { return false; }
 
-	int  configure     (Vector<String> &, ErrorHandler *) CLICK_COLD;
-	int  initialize    (ErrorHandler *) CLICK_COLD;
-	void cleanup       (CleanupStage) 	CLICK_COLD;
+	int  configure     (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
+	int  initialize    (ErrorHandler *) 			CLICK_COLD;
+	void cleanup       (CleanupStage) 			CLICK_COLD;
 
 	void add_handlers() CLICK_COLD;
 
@@ -88,11 +88,11 @@ class ToMMapDevice : public QueueDevice { public:
 #endif
 
 	int          _burst;
-    unsigned int _iqueue_size;
-    bool         _blocking;
-    int          _burst_size;
-    int          _timeout;
-    bool         _congestion_warning_printed;
+	unsigned int _iqueue_size;
+	bool         _blocking;
+	int          _burst_size;
+	int          _timeout;
+	bool         _congestion_warning_printed;
 
 	class InternalQueue {
 		public:

@@ -33,14 +33,6 @@
 #include <net/if.h>
 #include <features.h>
 
-static sig_atomic_t sigint = 0;
-
-static void sighandler(int num)
-{
-	click_chatter("Caught SIGINT");
-	sigint = 1;
-}
-
 CLICK_DECLS
 
 ToMMapDevice::ToMMapDevice()
@@ -51,8 +43,6 @@ ToMMapDevice::ToMMapDevice()
 #if HAVE_BATCH
 	_q_batch = 0;
 #endif
-
-	click_signal(SIGINT, sighandler, true);
 }
 
 ToMMapDevice::~ToMMapDevice()
@@ -286,7 +276,7 @@ ToMMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketB
 						(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
 						current->data(), packet_len
 					);
-					
+
 					/*
 					print_frame(
 						(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
@@ -311,7 +301,7 @@ ToMMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketB
 					//	(uint8_t *) ppd.raw + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll),
 					//	packet_len
 					//);
-					
+
 					break;
 				default:
 					click_chatter("[%s] [Tx thread] Bad TPCAKET version\n", ifname.c_str());
@@ -411,7 +401,7 @@ ToMMapDevice::flush_internal_queue(InternalQueue &iqueue) {
 
 		sent += r;
 	} while (r == sub_burst && iqueue.nr_pending > 0);
-	
+
 	unlock();
 
 	add_count(sent);
@@ -442,7 +432,7 @@ ToMMapDevice::push_packet(int port, Packet *p)
 				if (!_congestion_warning_printed)
 					click_chatter("%s: packet dropped", name().c_str());
 				_congestion_warning_printed = true;
-			} 
+			}
 			else {
 				if (!_congestion_warning_printed)
 					click_chatter("%s: congestion warning", name().c_str());
@@ -450,7 +440,7 @@ ToMMapDevice::push_packet(int port, Packet *p)
 			}
 		}
 		// If there is space in the iqueue
-		else { 
+		else {
 			if ( p != NULL ) {
 				iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _iqueue_size] = p;
 				iqueue.nr_pending++;
@@ -461,7 +451,7 @@ ToMMapDevice::push_packet(int port, Packet *p)
 			flush_internal_queue(iqueue);
 			if (_timeout && iqueue.nr_pending == 0)
 				iqueue.timeout.unschedule();
-		} 
+		}
 		else if ( _timeout >= 0 && !iqueue.timeout.scheduled() ) {
 			if ( _timeout == 0 )
 				iqueue.timeout.schedule_now();
@@ -495,7 +485,7 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 	Packet **pkts = iqueue.pkts;
 
 //	click_chatter("[%s] [%s] [Push batch] Packets", name().c_str(), _ifname.c_str());
-	
+
 	// First transmit what already exists in the queue
 	if ( iqueue.nr_pending ) {
 	//	click_chatter("[%s] [%s] [Push batch] Pending Packets", name().c_str(), _ifname.c_str());
@@ -523,7 +513,7 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 
 		// All sent
 		if (ret == iqueue.nr_pending) {
-			// Reset, there is nothing in the internal queue 
+			// Reset, there is nothing in the internal queue
 			iqueue.nr_pending = 0;
 			iqueue.index = 0;
 		}
@@ -606,7 +596,7 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 //	click_chatter("[%s] [%s] [Push batch] Ready to Tx", name().c_str(), _ifname.c_str());
 	r = send_batch(pending_batch);
 	ret  += r;
-	
+
 	add_count(ret);
 
 	// All sent
