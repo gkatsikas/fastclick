@@ -5,7 +5,10 @@
 #include <netdb.h>
 #include <assert.h>
 #include <sys/mman.h>
+#if !HAVE_DPDK
 #include <net/ethernet.h>
+#endif
+#include <linux/if_ether.h>
 #include <linux/if_packet.h>
 
 #define COOKED_PACKET

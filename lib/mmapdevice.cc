@@ -54,7 +54,7 @@ MMapDevice::initialize(ErrorHandler *errh)
 	if ( _is_initialized )
 		return 0;
 
-	click_chatter("[%s] Initializing MMap", name().c_str());
+	click_chatter("Initializing MMap");
 	_is_initialized = true;
 
 	return 0;
@@ -91,7 +91,7 @@ MMapDevice::add_device(const String ifname, Mode mode, unsigned short burst_size
 
 	DevInfo *info = _devs.findp(ifname);
 	if (!info) {
-		click_chatter("[%s] Adding %s device %s", name().c_str(), mode==RX_MODE? "Rx":"Tx", ifname.c_str());
+		click_chatter("Adding %s device %s", mode==RX_MODE? "Rx":"Tx", ifname.c_str());
 		_devs.insert(ifname, DevInfo(burst_size));
 		info = _devs.findp(ifname);
 	}
@@ -129,8 +129,7 @@ struct ring *
 MMapDevice::alloc_ring(const String ifname)
 {
 	if ( has_device(ifname) && (_ring_pool[ifname] != NULL) ) {
-		click_chatter("[%s] [%s] [Allocate Ring] Ring already allocated",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Allocate Ring] Ring already allocated", ifname.c_str());
 		return _ring_pool[ifname];
 	}
 
@@ -146,7 +145,7 @@ MMapDevice::alloc_ring(const String ifname)
 		ring->rx_rd_addr = NULL;
 		ring->tx_rd_addr = NULL;
 	}
-	click_chatter("[%s] [%s] [Allocate Ring] Successful allocation", name().c_str(), ifname.c_str());
+	click_chatter("[%s] [Allocate Ring] Successful allocation", ifname.c_str());
 
 	// Add it to the map
 	_ring_pool.insert(ifname, ring);
@@ -158,19 +157,19 @@ int
 MMapDevice::open_socket(const String ifname, struct ring *ring, int ver)
 {
 	if ( ring->sock_fd > 0 ) {
-		click_chatter("[%s] [%s] [Open Socket] Socket already open", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Open Socket] Socket already open", ifname.c_str());
 		return ring->sock_fd;
 	}
 
 	int sock_fd = socket(PF_PACKET, SOCK_TYPE, htons(SOCK_PROTO));
 	if ( sock_fd <= 0 ) {
-		click_chatter("[%s] [%s] [Open Socket] Failed to create socket", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Open Socket] Failed to create socket", ifname.c_str());
 		return -1;
 	}
 
 	int ret = setsockopt(sock_fd, SOL_PACKET, PACKET_VERSION, &ver, sizeof(ver));
 	if ( ret < 0 ) {
-		click_chatter("[%s] [%s] [Open Socket] Failed to set socket options", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Open Socket] Failed to set socket options", ifname.c_str());
 		return -1;
 	}
 
@@ -183,7 +182,7 @@ int
 MMapDevice::setup_ring(const String ifname, struct ring *ring, int version)
 {
 	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [%s] [Setup Ring] Failed to identify this device", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Ring] Failed to identify this device", ifname.c_str());
 		return -1;
 	}
 
@@ -206,23 +205,23 @@ MMapDevice::setup_ring(const String ifname, struct ring *ring, int version)
 								sizeof(ring->tx_req));
 			break;
 		default:
-			click_chatter("[%s] [%s] [Setup Ring] TPACKET version not supported", name().c_str(), ifname.c_str());
+			click_chatter("[%s] [Setup Ring] TPACKET version not supported", ifname.c_str());
 			return -1;
 	}
 
 	if (ret == -1) {
-		click_chatter("[%s] [%s] [Setup Ring] Failed to set TPACKET socket options", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Ring] Failed to set TPACKET socket options", ifname.c_str());
 		return -1;
 	}
 
 	ring->rd_len = ring->rd_num * sizeof(*ring->rd);
 	ring->rd     = (struct iovec *) malloc(ring->rd_len);
 	if (ring->rd == NULL) {
-		click_chatter("[%s] [%s] [Setup Ring] Failed to allocate ring descriptors", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Ring] Failed to allocate ring descriptors", ifname.c_str());
 		return -1;
 	}
 
-	click_chatter("[%s] [%s] [Setup Ring] Successfull", name().c_str(), ifname.c_str());
+	click_chatter("[%s] [Setup Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -231,12 +230,12 @@ int
 MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 {
 	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [%s] [MMap Ring] Failed to identify this device", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [MMap Ring] Failed to identify this device", ifname.c_str());
 		return -1;
 	}
 
 	if ( (ring->mmap_len <= 0) || (ring->sock_fd <= 0) ) {
-		click_chatter("[%s] [%s] [MMap Ring] Invalid configuration", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [MMap Ring] Invalid configuration", ifname.c_str());
 		return -1;
 	}
 
@@ -245,7 +244,7 @@ MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 		MAP_SHARED | MAP_LOCKED | MAP_POPULATE, ring->sock_fd, 0
 	);
 	if ( ring->mmap_base == MAP_FAILED ) {
-		click_chatter("[%s] [%s] [MMap Ring] Failed to map memory region", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [MMap Ring] Failed to map memory region", ifname.c_str());
 		return -1;
 	}
 
@@ -264,7 +263,7 @@ MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 	ring->tx_rd_addr = (char *)ring->mmap_base + ring->rx_rd_size;
 	ring->tx_rd_idx  = ring->rx_rd_num;
 
-	click_chatter("[%s] [%s] [MMap Ring] Successfull", name().c_str(), ifname.c_str());
+	click_chatter("[%s] [MMap Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -273,8 +272,7 @@ int
 MMapDevice::bind_ring(const String ifname, struct ring *ring)
 {
 	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [%s] [Walk Ring] Failed to find memory region for this device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Ring] Failed to find memory region for this device", ifname.c_str());
 		return -1;
 	}
 
@@ -287,14 +285,13 @@ MMapDevice::bind_ring(const String ifname, struct ring *ring)
 
 	int ret = bind(ring->sock_fd, (struct sockaddr *) &ring->link_layer, sizeof(ring->link_layer));
 	if (ret == -1) {
-		click_chatter("[%s] [%s] [Bind Ring] Could not bind to %d",
-						name().c_str(), ifname.c_str(), ring->sock_fd);
+		click_chatter("[%s] [Bind Ring] Could not bind to %d", ifname.c_str(), ring->sock_fd);
 		return -1;
 	}
 
 	ring->ifname = ifname;
 
-	click_chatter("[%s] [%s] [Bind Ring] Successfull", name().c_str(), ifname.c_str());
+	click_chatter("[%s] [Bind Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -303,20 +300,17 @@ int
 MMapDevice::setup_poll(const String ifname, struct ring *ring, Mode mode)
 {
 	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [%s] [Setup Poll] Failed to identify device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Poll] Failed to identify device", ifname.c_str());
 		return -1;
 	}
 
 	if ( ring->sock_fd <= 0 ) {
-		click_chatter("[%s] [%s] [Setup Poll] Cannot setup a poller for a non-existent fd",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Poll] Cannot setup a poller for a non-existent fd", ifname.c_str());
 		return -1;
 	}
 
 	if ( (mode != TX_MODE) && (mode != RX_MODE) ) {
-		click_chatter("[%s] [%s] [Setup Poll] Wrong mode. Choose Tx/Rx",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Setup Poll] Wrong mode. Choose Tx/Rx", ifname.c_str());
 		return -1;
 	}
 
@@ -341,8 +335,7 @@ int
 MMapDevice::unmap_ring(const String ifname)
 {
 	if ( !has_device(ifname) || (_ring_pool[ifname] == NULL) ) {
-		click_chatter("[%s] [%s] [MMap Free] Failed to map memory region",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [MMap Free] Failed to map memory region", ifname.c_str());
 		return -1;
 	}
 
@@ -375,8 +368,7 @@ int
 MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *p)
 {
 	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [%s] [Walk Tx Ring] Failed to find memory region for this device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device", ifname.c_str());
 		return -1;
 	}
 
@@ -384,17 +376,16 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 	int sock = ring->sock_fd;
 
 	if ( !p ) {
-		click_chatter("[%s] [%s] [Walk Tx Ring] Bad packet\n", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Bad packet\n", ifname.c_str());
 		return -1;
 	}
 	size_t packet_len = p->length();
 
-	click_chatter("[%s] [%s] [Walk Tx Ring] Ring %p\n", ifname.c_str(), ring);
+	click_chatter("[%s] [Walk Tx Ring] Ring %p\n", ifname.c_str(), ring);
 
 	DevInfo *info = _devs.findp(ifname);
 	if ( !info ) {
-		click_chatter("[%s] [%s] [Walk Tx Ring] Device not accessible\n",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Device not accessible\n", ifname.c_str());
 		return -1;
 	}
 
@@ -467,16 +458,14 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 
 	int ret = sendto(sock, NULL, 0, 0, NULL, 0);
 	if ( ret < 0 ) {
-		click_chatter("[%s] [%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer", ifname.c_str());
 		return -1;
 	}
 
 	info->update_tx_info(sent_pkts, sent_bytes);
 	ring->tx_rd_idx = frame_num;
 
-//	click_chatter("[%s] [%s] [Walk Tx Ring] Batch of %d packets (%u bytes) sent\n",
-//					name().c_str(), ifname.c_str(), sent_pkts, sent_bytes);
+//	click_chatter("[%s] [Walk Tx Ring] Batch of %d packets (%u bytes) sent\n", ifname.c_str(), sent_pkts, sent_bytes);
 
 	return 0;
 }
@@ -487,8 +476,7 @@ int
 MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBatch *batch)
 {
 	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [%s] [Walk Tx Ring] Failed to find memory region for this device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device", ifname.c_str());
 		return -1;
 	}
 
@@ -516,8 +504,7 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 	unsigned int frame_num = ring->tx_rd_idx;
 	Packet* current = batch;
 	bool empty = false;
-//	click_chatter("[%s] [%s] [Tx thread] Ring %p to transmit %d packets\n",
-					name().c_str(), ifname.c_str(), ring, burst_size);
+//	click_chatter("[%s] [Tx thread] Ring %p to transmit %d packets\n", ifname.c_str(), ring, burst_size);
 
 	while ( (sent_pkts < burst_size) && !empty ) {
 
@@ -531,8 +518,7 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 
 			// The length of the cuurent packet in the batch
 			size_t packet_len = current->length();
-		//	click_chatter("[%s] [%s] [Tx thread] Packet %d with length %d bytes\n",
-							name().c_str(), ifname.c_str(), sent_pkts, packet_len);
+		//	click_chatter("[%s] [Tx thread] Packet %d with length %d bytes\n", ifname.c_str(), sent_pkts, packet_len);
 
 			switch (ring->version) {
 				case TPACKET_V1:
@@ -600,8 +586,7 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 		// Transmit the whole batch
 		int ret = sendto(sock, NULL, 0, 0, NULL, 0);
 		if ( ret < 0 ) {
-			click_chatter("[%s] [Walk Tx] Failed to transmit the contents of the ring buffer",
-							name().c_str(), ifname.c_str());
+			click_chatter("[Walk Tx] Failed to transmit the contents of the ring buffer", ifname.c_str());
 			return -1;
 		}
 
@@ -613,8 +598,7 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 
 	ring->tx_rd_idx = frame_num;
 
-//	click_chatter("[%s] [%s] [Walk Tx] Batch of %d packets (%u bytes) sent\n",
-					name().c_str(), ifname.c_str(), sent_pkts, sent_bytes);
+//	click_chatter("[%s] [Walk Tx] Batch of %d packets (%u bytes) sent\n", ifname.c_str(), sent_pkts, sent_bytes);
 
 	return sent_pkts;
 }
@@ -625,8 +609,7 @@ Packet *
 MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 {
 	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [%s] [Walk Rx Ring] Failed to find memory region for this device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Rx Ring] Failed to find memory region for this device", ifname.c_str());
 		return NULL;
 	}
 
@@ -637,8 +620,7 @@ MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 
 	DevInfo *info = _devs.findp(ifname);
 	if ( !info ) {
-		click_chatter("[%s] [%s] [Walk Rx Ring] Device not accessible\n",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Rx Ring] Device not accessible\n", ifname.c_str());
 		return NULL;
 	}
 
@@ -697,8 +679,8 @@ MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 	// Update the index of the Rx ring buffer
 	ring->rx_rd_idx = frame_num;
 
-	//click_chatter("[%s] [%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
-	//				name().c_str(), ifname.c_str(), recv_pkts, recv_bytes, frame_num);
+	//click_chatter("[%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
+	//				ifname.c_str(), recv_pkts, recv_bytes, frame_num);
 
 	return p;
 }
@@ -709,8 +691,7 @@ PacketBatch *
 MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
 {
 	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [%s] [Walk Rx Ring] Failed to find memory region for this device",
-						name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Rx Ring] Failed to find memory region for this device", ifname.c_str());
 		return NULL;
 	}
 
@@ -720,11 +701,11 @@ MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
 	PacketBatch    *head = NULL;
 	WritablePacket *last = NULL;
 
-	//click_chatter("[%s] [Rx thread] Ring %p\n", name().c_str(), ifname.c_str(), ring);
+	//click_chatter("[%s] [Rx thread] Ring %p\n", ifname.c_str(), ring);
 
 	DevInfo *info = _devs.findp(ifname);
 	if ( !info ) {
-		click_chatter("[%s] [%s] [Walk Rx Ring] Device not accessible\n", name().c_str(), ifname.c_str());
+		click_chatter("[%s] [Walk Rx Ring] Device not accessible\n", ifname.c_str());
 		return NULL;
 	}
 
@@ -795,8 +776,8 @@ MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
 	// Update the index of the Rx ring buffer
 	ring->rx_rd_idx = frame_num;
 
-	//click_chatter("[%s] [%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
-	//				name().c_str(), ifname.c_str(), recv_pkts, recv_bytes, frame_num);
+	//click_chatter("[%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
+	//				ifname.c_str(), recv_pkts, recv_bytes, frame_num);
 
 	// Assimilate batch and return it back to the element
 	if ( head ) {
@@ -847,7 +828,7 @@ MMapDevice::set_packet_loss_discard(int sock_fd)
 
 	ret = setsockopt(sock_fd, SOL_PACKET, PACKET_LOSS, (void *) &discard, sizeof(discard));
 	if (ret == -1) {
-		click_chatter("[%s] [Set Pkt Loss Discard] Failed to set socket options", name().c_str());
+		click_chatter("[Set Pkt Loss Discard] Failed to set socket options");
 		return -1;
 	}
 
@@ -863,7 +844,7 @@ MMapDevice::tx_kernel_ready(void *base, int version)
 		case TPACKET_V2:
 			return _v2_tx_kernel_ready( (struct tpacket2_hdr *)base );
 		default:
-			click_chatter("[%s] [Tx Kernel Ready] Unsupported TPACKET version", name().c_str());
+			click_chatter("[Tx Kernel Ready] Unsupported TPACKET version");
 			break;
 	}
 
@@ -881,7 +862,7 @@ MMapDevice::tx_user_ready(void *base, int version)
 			_v2_tx_user_ready( (struct tpacket2_hdr *)base );
 			break;
 		default:
-			click_chatter("[%s] [Tx Kernel Ready] Unsupported TPACKET version", name().c_str());
+			click_chatter("[Tx Kernel Ready] Unsupported TPACKET version");
 			exit(-1);
 	}
 }
@@ -921,7 +902,7 @@ MMapDevice::rx_kernel_ready(void *base, int version)
 		case TPACKET_V2:
 			return _v2_rx_kernel_ready( (struct tpacket2_hdr *)base );
 		default:
-			click_chatter("[%s] [Rx Kernel Ready] Unsupported TPACKET version", name().c_str());
+			click_chatter("[Rx Kernel Ready] Unsupported TPACKET version");
 			break;
 	}
 
@@ -939,7 +920,7 @@ MMapDevice::rx_user_ready(void *base, int version)
 			_v2_rx_user_ready( (struct tpacket2_hdr *)base );
 			break;
 		default:
-			click_chatter("[%s] [Rx User Ready] Unsupported TPACKET version", name().c_str());
+			click_chatter("[Rx User Ready] Unsupported TPACKET version");
 			exit(-1);
 	}
 }
@@ -1011,14 +992,12 @@ MMapDevice::print_frame(void *frame, size_t len)
 	struct ethhdr *eth = (struct ethhdr *)frame;
 
 	if ( len < sizeof(struct ethhdr) ) {
-		click_chatter("[%s] [Test Payload] Frame too small: %zu bytes!\n",
-						name().c_str(), len);
+		click_chatter("[Test Payload] Frame too small: %zu bytes!\n", len);
 		return;
 	}
 
 	if ( eth->h_proto != htons(ETH_P_IP) ) {
-		click_chatter("[%s] [Test Payload] Wrong ethernet type: 0x%x!\n",
-						name().c_str(), ntohs(eth->h_proto));
+		click_chatter("[Test Payload] Wrong ethernet type: 0x%x!\n", ntohs(eth->h_proto));
 		return;
 	}
 
