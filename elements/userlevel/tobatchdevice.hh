@@ -1,119 +1,127 @@
 #ifndef CLICK_TOBATCHDEVICE_USERLEVEL_HH
 #define CLICK_TOBATCHDEVICE_USERLEVEL_HH
+
 #include <click/batchelement.hh>
+#include <click/standard/storage.hh>
 #include <click/string.hh>
-#include <click/task.hh>
-#include <click/timer.hh>
-#include <click/notifier.hh>
+
 #include "elements/userlevel/frombatchdevice.hh"
+
 CLICK_DECLS
 
 /*
- * =title ToBatchDevice.u
- * =c
- * ToBatchDevice(DEVNAME [, I<keywords>])
- * =s netdevices
- * sends packets to network device (user-level)
- * =d
- *
- * This manual page describes the user-level version of the ToBatchDevice element.
- *
- * Pulls packets in batch-style and sends them out.
- *
- * Keyword arguments are:
- *
- * =over 8
- *
- * =item BURST
- *
- * Integer. Maximum number of packets to pull per scheduling. Defaults to 1.
- *
- * =item METHOD
- *
- * Word. Defines the method ToBatchDevice will use to write packets to the
- * device. LINUX method is currently supported.
- *
- * =item DEBUG
- *
- * Boolean.  If true, print out debug messages.
- *
- * =back
- *
- * This element is only available at user level.
- *
- * =n
- *
- * Packets sent via ToBatchDevice should already have a link-level
- * header prepended. This means that ARP processing,
- * for example, must already have been done.
- *
- * The L<FromBatchDevice(n)> element's OUTBOUND keyword argument determines whether
- * FromBatchDevice receives packets sent by a ToBatchDevice element for the same
- * device.
- *
- * Packets that are written successfully are sent on output 0, if it exists.
- * Packets that fail to be written are pushed out output 1, if it exists.
+=title ToBatchDevice.u
 
- * KernelTun lets you send IP packets to the host kernel's IP processing code,
- * sort of like the kernel module's ToHost element.
- *
- * =a
- * FromBatchDevice.u, FromDump, ToDump, KernelTun, ToBatchDevice(n) */
+=c
 
-class ToBatchDevice : public BatchElement { public:
+ToBatchDevice(DEVNAME [, I<keywords>])
 
-    ToBatchDevice()  CLICK_COLD;
-    ~ToBatchDevice() CLICK_COLD;
+=s netdevices
 
-    const char *class_name() const		{ return "ToBatchDevice"; }
-    const char *port_count() const		{ return "1/0-2"; }
-    const char *processing() const		{ return "l/h"; }
-    const char *flags() const			{ return "S2"; }
+sends packets to a Linux-based network device (user-level) in batch mode
 
-    int  configure_phase() const { return KernelFilter::CONFIGURE_PHASE_TODEVICE; }
-    int  configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
-    int  initialize(ErrorHandler *) CLICK_COLD;
-    void cleanup(CleanupStage) CLICK_COLD;
-    void add_handlers() CLICK_COLD;
+=d
 
-    String ifname() const	{ return _ifname; }
-    int fd() const		{ return _fd; }
+This manual page describes the user-level ToBatchDevice element.
+Sends packets out the named device using a full-push model with an internal queue.
+Keyword arguments are:
 
-    bool run_task(Task *);
-    void selected(int fd, int mask);
+=over 8
 
-  protected:
+=item DEVNAME
 
-    Task _task;
-    Timer _timer;
+String. The name of the interface where we send the packets.
 
-    String _ifname;
-    int _fd;
-    enum { method_default, method_linux, method_pcap, method_devbpf, method_pcapfd };
-    int _method;
-    NotifierSignal _signal;
+=item BURST
 
-    Packet      *_q;
-#if HAVE_BATCH
-    PacketBatch *_q_batch;
-#endif
-    int _burst;
+Integer. Maximum number of packets to pull per scheduling. Defaults to 1.
 
-    bool _debug;
-    bool _my_fd;
-    int _backoff;
-    int _pulls;
+=back
 
-    enum { h_debug, h_signal, h_pulls, h_q };
-    FromBatchDevice *find_fromdevice() const;
-    int send_packet(Packet *p);
-#if HAVE_BATCH
-    int send_batch(PacketBatch *batch);
-    int emit_batch(unsigned char *batch_data, unsigned short batch_len);
-#endif
+This element is only available at user level.
 
-    static int write_param(const String &in_s, Element *e, void *vparam, ErrorHandler *errh) CLICK_COLD;
-    static String read_param(Element *e, void *thunk) CLICK_COLD;
+=n
+
+Packets sent via ToBatchDevice should already have a link-level
+header prepended. This means that ARP processing,
+for example, must already have been done.
+
+The L<FromBatchDevice(n)> element's OUTBOUND keyword argument determines whether
+FromBatchDevice receives packets sent by a ToBatchDevice element for the same
+device.
+
+No putput ports.
+
+=a
+FromBatchDevice.u
+*/
+
+class ToBatchDevice : public BatchElement {
+	public:
+
+		ToBatchDevice()  CLICK_COLD;
+		~ToBatchDevice() CLICK_COLD;
+
+		const char *class_name() const { return "ToBatchDevice"; }
+		const char *port_count() const { return PORTS_1_0; }
+		const char *processing() const { return PUSH; }
+
+		int    configure_phase() const	{ return CONFIGURE_PHASE_PRIVILEGED; }
+
+		int configure    (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
+		int initialize   (ErrorHandler *) 			CLICK_COLD;
+		void cleanup     (CleanupStage) 			CLICK_COLD;
+		void add_handlers() 					CLICK_COLD;
+
+		String ifname() const 	{ return _ifname; }
+		int        fd() const 	{ return _fd; }
+
+		void push_packet(int port, Packet *);
+	#if HAVE_BATCH
+		void push_batch (int port, PacketBatch *);
+	#endif
+
+	protected:
+
+		class TXInternalQueue {
+			public:
+				TXInternalQueue() : pkts(0), index(0), nr_pending(0) { }
+
+				// Array of DPDK Buffers
+				Packet **pkts;
+				// Index of the first valid packet in the packets array
+				unsigned int index;
+				// Number of valid packets awaiting to be sent after index
+				unsigned int nr_pending;
+
+				// Timer to limit time a batch will take to be completed
+				Timer timeout;
+		} __attribute__((aligned(64)));
+
+		inline void set_flush_timer (TXInternalQueue &iqueue);
+		void flush_internal_tx_queue(TXInternalQueue &iqueue);
+
+		// Internal queue to store packets to be emitted
+		// No need to use a Queue element anymore
+		TXInternalQueue _iqueue;
+		unsigned int    _internal_tx_queue_size;
+
+		String          _ifname;
+		int             _fd;
+		bool            _my_fd;
+
+		counter_t       _n_sent;
+		counter_t       _n_dropped;
+
+		int             _burst_size;
+		short           _timeout;
+		bool            _blocking;
+		bool            _congestion_warning_printed;
+
+		FromBatchDevice *find_fromdevice() const;
+		int send_packet(Packet *p);
+
+		static String read_handler(Element *e, void *thunk) CLICK_COLD;
 };
 
 CLICK_ENDDECLS

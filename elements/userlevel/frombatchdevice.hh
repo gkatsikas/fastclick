@@ -1,5 +1,6 @@
 #ifndef CLICK_FROMBATCHDEVICE_USERLEVEL_HH
 #define CLICK_FROMBATCHDEVICE_USERLEVEL_HH
+
 #include <click/batchelement.hh>
 #include "elements/userlevel/kernelfilter.hh"
 
@@ -18,22 +19,17 @@ reads packets from a Linux-based network device (user-level)
 
 =d
 
-This manual page describes the user-level version of the FromBatchDevice
-element.
-
+This manual page describes the user-level FromBatchDevice element.
 Reads packets from the kernel that were received on the network controller
-named DEVNAME.
+named DEVNAME. It operates on both normal and batch mode by pushing packets
+or batches of packets to the next element respectively.
 
-User-level FromBatchDevice behaves like a packet sniffer by default. Packets
-emitted by FromBatchDevice are also received and processed by the kernel. Thus, it
-doesn't usually make sense to run a router with user-level Click, since each
-packet will get processed twice (once by Click, once by the kernel). Install
-firewalling rules in your kernel if you want to prevent this, for instance
+FromBatchDevice behaves like a packet sniffer by default. Packets
+emitted by FromBatchDevice are also received and processed by the kernel.
+Thus, it doesn't usually make sense to run a router with user-level Click,
+since each packet will get processed twice (once by Click, once by the kernel).
+Install firewalling rules in your kernel if you want to prevent this, for instance
 using the KernelFilter element or FromBatchDevice's SNIFFER false argument.
-
-Under Linux, a FromBatchDevice element will not receive packets sent by a
-ToDevice element for the same device. Under other operating systems, your
-mileage may vary.
 
 Sets the packet type annotation appropriately. Also sets the timestamp
 annotation to the time the kernel reports that the packet was received.
@@ -41,6 +37,10 @@ annotation to the time the kernel reports that the packet was received.
 Keyword arguments are:
 
 =over 8
+
+=item DEVNAME
+
+String. The name of the interface where we receive packets from.
 
 =item SNIFFER
 
@@ -63,11 +63,6 @@ Defaults to 2046.
 
 Boolean. If true, then output only IP packets. (Any link-level header remains,
 but the IP header annotation has been set appropriately.) Default is false.
-
-=item METHOD
-
-Word.  Defines the capture method FromBatchDevice will use to read packets from the
-device.  LINUX moethod is currently supported.
 
 =item OUTBOUND
 
@@ -125,61 +120,60 @@ Returns a string indicating the encapsulation type on this link. Can be
 
 =a ToBatchDevice.u */
 
-class FromBatchDevice : public BatchElement {
-  public:
-
-    FromBatchDevice()  CLICK_COLD;
-    ~FromBatchDevice() CLICK_COLD;
-
-    const char *class_name() const	{ return "FromBatchDevice"; }
-    const char *port_count() const	{ return "0/1-2"; }
-    const char *processing() const	{ return PUSH; }
-
-    enum { default_snaplen = 2046 };
-    int configure_phase() const	{ return KernelFilter::CONFIGURE_PHASE_FROMDEVICE; }
-
-    int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
-    int initialize(ErrorHandler *) CLICK_COLD;
-    void cleanup(CleanupStage) CLICK_COLD;
-    void add_handlers() CLICK_COLD;
-
-    inline String ifname() const	{ return _ifname; }
-    inline int fd() const		{ return _fd; }
-
-    void selected(int fd, int mask);
-    static int open_packet_socket(String, ErrorHandler *);
-    static int set_promiscuous(int, String, bool);
-    void kernel_drops(bool& known, int& max_drops) const;
-
-  private:
-
-    int _fd;
-
-    bool _force_ip;
-    int _burst;
-    int _datalink;
-
 #if HAVE_INT64_TYPES
-    typedef uint64_t counter_t;
+	typedef uint64_t counter_t;
 #else
-    typedef uint32_t counter_t;
+	typedef uint32_t counter_t;
 #endif
-    counter_t _count;
 
-    String _ifname;
-    bool _sniffer : 1;
-    bool _promisc : 1;
-    bool _outbound : 1;
-    bool _timestamp : 1;
-    int _was_promisc : 2;
-    int _snaplen;
-    uint16_t _protocol;
-    unsigned _headroom;
-    enum { method_default, method_pcap, method_linux };
-    int _method;
+class FromBatchDevice : public BatchElement {
+	public:
 
-    static String read_handler(Element*, void*) CLICK_COLD;
-    static int write_handler(const String&, Element*, void*, ErrorHandler*) CLICK_COLD;
+		FromBatchDevice()  CLICK_COLD;
+		~FromBatchDevice() CLICK_COLD;
+
+		const char *class_name() const	{ return "FromBatchDevice"; }
+		const char *port_count() const	{ return "0/1-2"; }
+		const char *processing() const	{ return PUSH; }
+
+		enum { default_snaplen = 2046 };
+		int    configure_phase() const	{ return KernelFilter::CONFIGURE_PHASE_FROMDEVICE; }
+
+		int  configure   (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
+		int  initialize  (ErrorHandler *) 			CLICK_COLD;
+		void cleanup     (CleanupStage) 			CLICK_COLD;
+		void add_handlers() 					CLICK_COLD;
+
+		inline String ifname() const	{ return _ifname; }
+		inline int        fd() const	{ return _fd; }
+
+		void       selected          (int fd, int mask);
+		static int open_packet_socket(String, ErrorHandler *);
+		static int set_promiscuous   (int, String, bool);
+		void       kernel_drops      (bool& known, int& max_drops) const;
+
+	private:
+
+		int       _fd;
+
+		bool      _force_ip;
+		int       _burst_size;
+		int       _datalink;
+
+		counter_t _n_recv;
+
+		String    _ifname;
+		bool      _sniffer : 1;
+		bool      _promisc : 1;
+		bool      _outbound : 1;
+		bool      _timestamp : 1;
+		int       _was_promisc : 2;
+		int       _snaplen;
+		uint16_t  _protocol;
+		unsigned  _headroom;
+
+		static String read_handler (Element*, void*) CLICK_COLD;
+		static int    write_handler(const String&, Element*, void*, ErrorHandler*) CLICK_COLD;
 };
 
 CLICK_ENDDECLS

@@ -1,10 +1,14 @@
 /*
- * todevice.{cc,hh} -- element writes packets to network via pcap library
+ * tobatchdevice.{cc,hh} -- element writes packets to Linux-based interfaces
  * Douglas S. J. De Couto, Eddie Kohler, John Jannotti
+ *
+ * Transformed into a full push element with computational batching support
+ * by Georgios Katsikas
  *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
  * Copyright (c) 2005-2008 Regents of the University of California
  * Copyright (c) 2011 Meraki, Inc.
+ * Copyright (c) 2016 KTH Royal Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -18,12 +22,10 @@
  */
 
 #include <click/config.h>
-#include "tobatchdevice.hh"
 #include <click/error.hh>
 #include <click/etheraddress.hh>
 #include <click/args.hh>
 #include <click/router.hh>
-#include <click/standard/scheduleinfo.hh>
 #include <click/packet_anno.hh>
 #include <click/straccum.hh>
 #include <stdio.h>
@@ -40,24 +42,15 @@
 #  include <linux/if_packet.h>
 # endif
 
-#if HAVE_BATCH
-// Maximum number of packets (or batch size) this element can pull from its predecessor
-static const short PULL_LIMIT = 256;
-// The size of the buffer is set to the standard MTU.
-// If the application handles small packets, syscall overhead will be substantially amortized.
-static const short BATCH_BUFFER_SIZE = 1526;
-
-//static unsigned char batch_data[BATCH_BUFFER_SIZE];
-#endif
+#include "tobatchdevice.hh"
 
 CLICK_DECLS
 
 ToBatchDevice::ToBatchDevice()
-    : _task(this), _timer(&_task), _q(0), _pulls(0), _fd(-1), _my_fd(false)
+	: 	_n_sent(0), _n_dropped(0), _fd(-1), _my_fd(false), _timeout(0),
+		_blocking(false), _congestion_warning_printed(false), _internal_tx_queue_size(-1)
+
 {
-#if HAVE_BATCH
-    _q_batch = 0;
-#endif
 }
 
 ToBatchDevice::~ToBatchDevice()
@@ -67,353 +60,283 @@ ToBatchDevice::~ToBatchDevice()
 int
 ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 {
-    String method;
-    _burst = 1;
-    if (Args(conf, this, errh)
-	.read_mp("DEVNAME", _ifname)
-	.read("DEBUG", _debug)
-	.read("METHOD", WordArg(), method)
-	.read("BURST", _burst)
-	.complete() < 0)
-	return -1;
-    if (!_ifname)
-	return errh->error("interface not set");
-    if (_burst <= 0)
-	return errh->error("bad BURST");
+	String method;
+	_burst_size = 1;
+
+	if (Args(conf, this, errh)
+			.read_mp("DEVNAME", _ifname)
+			.read("BURST",      _burst_size)
+			.read("IQUEUE",     _internal_tx_queue_size)
+			.complete() < 0)
+		return -1;
+
+	if ( !_ifname )
+		return errh->error("[%s] Interface not set", name().c_str());
+
+	if ( _burst_size <= 0 )
+		return errh->error("[%s] Bad BURST", name().c_str());
+
+	if ( _internal_tx_queue_size == 0 ) {
+		_internal_tx_queue_size = 1024;
+		errh->warning("[%s] Non-positive IQUEUE size. Setting default (%d) \n",
+					name().c_str(), _internal_tx_queue_size);
+	}
 
 #if HAVE_BATCH
 	if (batch_mode() == BATCH_MODE_YES)
-		errh->warning("BURST is unused with batching!");
+		errh->warning("[%s] BURST is unused with batching!", name().c_str());
 #endif
 
-    if (method == "") {
-	_method = method_linux;
-    }
-    else if (method == "LINUX")
-	_method = method_linux;
-    else
-	return errh->error("bad METHOD");
-
-    return 0;
+	return 0;
 }
 
 FromBatchDevice *
 ToBatchDevice::find_fromdevice() const
 {
-    Router *r = router();
-    for (int ei = 0; ei < r->nelements(); ++ei) {
-	FromBatchDevice *fd = (FromBatchDevice *) r->element(ei)->cast("FromBatchDevice");
-	if (fd && fd->ifname() == _ifname && fd->fd() >= 0)
-	    return fd;
-    }
-    return 0;
+	Router *r = router();
+	for (int ei = 0; ei < r->nelements(); ++ei) {
+		FromBatchDevice *fd = (FromBatchDevice *) r->element(ei)->cast("FromBatchDevice");
+		if (fd && fd->ifname() == _ifname && fd->fd() >= 0)
+			return fd;
+	}
+	return 0;
 }
 
 int
 ToBatchDevice::initialize(ErrorHandler *errh)
 {
-    _timer.initialize(this);
+	FromBatchDevice *fd = find_fromdevice();
 
-    FromBatchDevice *fd = find_fromdevice();
-    if (fd && _method == method_default) {
-	if (fd->fd() >= 0)
-	    _method = method_linux;
-    }
+	if (fd && fd->fd() >= 0)
+		_fd = fd->fd();
+	else {
+		_fd = FromBatchDevice::open_packet_socket(_ifname, errh);
 
-    if (fd && fd->fd() >= 0)
-    	_fd = fd->fd();
-    else {
-	_fd = FromBatchDevice::open_packet_socket(_ifname, errh);
-	if (_fd < 0)
-		return -1;
-	_my_fd = true;
-    }
+		if (_fd < 0)
+			return -1;
+		_my_fd = true;
+	}
 
-    // check for duplicate writers
-    void *&used = router()->force_attachment("device_writer_" + _ifname);
-    if (used)
-	return errh->error("duplicate writer for device %<%s%>", _ifname.c_str());
-    used = this;
+	// check for duplicate writers
+	void *&used = router()->force_attachment("device_writer_" + _ifname);
+	if (used)
+		return errh->error("[%s] Duplicate writer for device %<%s%>", name().c_str(), _ifname.c_str());
+	used = this;
 
-    ScheduleInfo::join_scheduler(this, &_task, errh);
-    _signal = Notifier::upstream_empty_signal(this, 0, &_task);
-    return 0;
+	// Allocate space for the internal queue
+	_iqueue.pkts = new Packet *[_internal_tx_queue_size];
+	if (_timeout >= 0) {
+		_iqueue.timeout.assign     (this);
+		_iqueue.timeout.initialize (this);
+		_iqueue.timeout.move_thread(click_current_cpu_id());
+	}
+
+	return 0;
 }
 
 void
 ToBatchDevice::cleanup(CleanupStage)
 {
-    if (_fd >= 0 && _my_fd)
-	close(_fd);
-    _fd = -1;
+	if (_fd >= 0 && _my_fd)
+		close(_fd);
+	_fd = -1;
+
+	if ( _iqueue.pkts )
+		delete[] _iqueue.pkts;
 }
 
-/*
- * Linux select marks datagram fd's as writeable when the socket
- * buffer has enough space to do a send (sock_writeable() in
- * sock.h). BSD select always marks datagram fd's as writeable
- * (bpf_poll() in sys/net/bpf.c) This function should behave
- * appropriately under both.  It makes use of select if it correctly
- * tells us when buffers are available, and it schedules a backoff
- * timer if buffers are not available.
- * --jbicket
- */
 int
 ToBatchDevice::send_packet(Packet *p)
 {
-    int r = 0;
-    errno = 0;
-
-    r = send(_fd, p->data(), p->length(), 0);
-
-    if (r >= 0)
-	return 0;
-    else
-	return errno ? -errno : -EINVAL;
+	if ( !p || p->length() == 0 )
+		return -1;
+	return send(_fd, p->data(), p->length(), 0);
 }
 
-#if HAVE_BATCH
-int
-ToBatchDevice::emit_batch(unsigned char *batch_data, unsigned short batch_len) {
-	return send(_fd, &batch_data[0], batch_len, 0);
-}
-
-int
-ToBatchDevice::send_batch(PacketBatch *batch) {
-	int r        = 0;
-	int count    = 0;
-	int syscalls = 0;
-
-	Packet *head     = NULL;
-   	Packet *previous = NULL;
-	Packet *current  = batch;
-	unsigned int buffer_size = BATCH_BUFFER_SIZE;
-
-	unsigned char batch_data[buffer_size];
-	memset(batch_data, 0, buffer_size*sizeof(unsigned char));
-//	unsigned int buf_index = 0;
-//	bool emitted = false;
-
-	// Iterate the batch
-	while ( current ) {
-		Packet *next = current->next();
-
-		//click_chatter("Curr: %d  -  Available size: %d)", current->length(), (buffer_size - buf_index));
-		int bytes_sent = emit_batch((unsigned char*)current->data(), current->length());
-		if ( bytes_sent < 0 ) {
-			click_chatter("[ERROR] [IN LOOP] Failed to emit packet");
-			return 0;
-		}
-		syscalls ++;
-
-		/*
-		// Not enough space for this packet
-		if ( current->length() > (buffer_size - (buf_index)) ) {
-			// Emit the buffer and reset it to host this new packet
-			int bytes_sent = emit_batch(batch_data, buf_index);
-			if ( (bytes_sent >= 0) && (bytes_sent == buf_index) ) {
-				r += bytes_sent;
-				emitted = true;
-				syscalls ++;
-			}
-			else {
-				click_chatter("[ERROR] [IN LOOP] Failed to emit batch");
-				return 0;
-			}
-
-			memset(&batch_data[0], 0, buffer_size*sizeof(unsigned char));
-			buf_index = 0;
-		}
-
-		// Keep this packet in the buffer
-		if ( (buf_index + current->length()) <= buffer_size ) {
-			memcpy(&batch_data[buf_index], current->data(), current->length());
-			buf_index += current->length();
-			emitted = false;
-		}
-		else {
-			click_chatter("[ERROR] Attempted to write more bytes than the available buffer size");
-			return 0;
-		}
-		*/
-
-		if (previous == NULL)
-			head = current;
-		else
-			previous->set_next(current);
-
-		current->set_next(next);
-		previous = current;
-		current  = next;
-		count++;
-	}
-
-	/*
-	// Leftovers will be emitted now
-	if ( ! emitted ) {
-		int bytes_sent = emit_batch(&batch_data[0], buf_index);
-		if ( (bytes_sent >= 0) && (bytes_sent == buf_index) ) {
-			r += bytes_sent;
-			syscalls ++;
-		}
-		else if ( (bytes_sent >= 0) && (bytes_sent < buf_index) ) {
-			bytes_sent = emit_batch(&batch_data[bytes_sent-1], buf_index-bytes_sent);
-			if ( bytes_sent != buf_index-bytes_sent ) {
-				click_chatter("[ERROR] [OUT OF LOOP] Failed to emit batch");
-			}
-			r += bytes_sent;
-		}
-		else {
-			click_chatter("[ERROR] [OUT OF LOOP] Failed to emit batch");
-			return 0;
-		}
-	}
-	*/
-
-	_pulls += count;
-
-	if ( head ) {
-		if ( batch == head )
-			checked_output_push_batch(0, PacketBatch::make_from_list(batch, count));
-		else {
-			checked_output_push_batch(0, PacketBatch::make_from_list(head,  count));
-		}
-	}
-
-	// Upon success, returns the number of packets sent
-	if (r >= 0) {
-		click_chatter("Transmitted packets %d (%d bytes) with %d syscalls", count, r, syscalls);
-		return count;
-	}
-	return errno ? -errno : -EINVAL;
-}
-#endif
-
-bool
-ToBatchDevice::run_task(Task *)
+inline void
+ToBatchDevice::set_flush_timer(TXInternalQueue &iqueue)
 {
-#if HAVE_BATCH
-	PacketBatch *p = _q_batch;
-	_q_batch = 0;
-#else
-	Packet *p = _q;
-	_q = 0;
-#endif
-	int count = 0, r = 0;
+	if ( _timeout >= 0 ) {
+		if ( iqueue.timeout.scheduled() ) {
+			// No more pending packets, remove timer
+			if ( iqueue.nr_pending == 0 )
+				iqueue.timeout.unschedule();
+		}
+		else {
+			if ( iqueue.nr_pending > 0 )
+				// Pending packets, set timeout to flush packets
+				// after a while even without burst
+				if ( _timeout == 0 )
+					iqueue.timeout.schedule_now();
+				else
+					iqueue.timeout.schedule_after_msec(_timeout);
+		}
+	}
+}
+
+/* Flush as many packets as possible from the internal queue of the DPDK ring. */
+void
+ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
+{
+	unsigned sent = 0;
 
 	do {
-		if (!p) {
-		#if HAVE_BATCH
-			if (!(p = input_pull_batch(0, PULL_LIMIT)))
-				break;
-		#else
-			++_pulls;
-			if (!(p = input(0).pull()))
-				break;
-		#endif
-		}
-	#if HAVE_BATCH
-		if ((r = send_batch(p)) >= 0) {
-			_backoff = 0;
-			count += r;
-			p = 0;
-		}
-	#else
-		if ((r = send_packet(p)) >= 0) {
-			_backoff = 0;
-			checked_output_push(0, p);
-			++count;
-			p = 0;
-		}
-	#endif
-		else {
+		Packet *p = iqueue.pkts[iqueue.index];
+
+		if ( send_packet(p) < 0 )
 			break;
-		}
-	} while (count < _burst);
 
-	// In case of a Tx error, re-schedule with some backoff time
-	if (r == -ENOBUFS || r == -EAGAIN) {
-		assert(!_q);
-		_q = p;
+		++sent;
 
-		if (!_backoff) {
-			_backoff = 1;
-			add_select(_fd, SELECT_WRITE);
-		}
-		else {
-			_timer.schedule_after(Timestamp::make_usec(_backoff));
-			if (_backoff < 256)
-				_backoff *= 2;
-			if (_debug) {
-				Timestamp now = Timestamp::now();
-				click_chatter("%p{element} backing off for %d at %p{timestamp}\n", this, _backoff, &now);
-			}
-		}
-		return count > 0;
-	}
-	else if (r < 0) {
-		click_chatter("ToBatchDevice(%s): %s", _ifname.c_str(), strerror(-r));
-		checked_output_push(1, p);
-	}
+		iqueue.nr_pending --;
+		iqueue.index      ++;
 
-	if (p || _signal)
-		_task.fast_reschedule();
-	return count > 0;
+		// Wrapping around the ring
+		if (iqueue.index >= _internal_tx_queue_size)
+			iqueue.index = 0;
+
+	} while ( iqueue.nr_pending > 0 );
+
+	_n_sent += sent;
+
+	// If ring is empty, reset the index to avoid wrap ups
+	if (iqueue.nr_pending == 0)
+		iqueue.index = 0;
 }
 
 void
-ToBatchDevice::selected(int, int)
+ToBatchDevice::push_packet(int, Packet *p)
 {
-    _task.reschedule();
-    remove_select(_fd, SELECT_WRITE);
+	// Get the internal queue
+	TXInternalQueue &iqueue = _iqueue;
+
+	bool congestioned;
+	do {
+		congestioned = false;
+
+		// Internal queue is full
+		if ( iqueue.nr_pending == _internal_tx_queue_size ) {
+			// We just set the congestion flag. If we're in blocking mode,
+			// we'll loop, else we'll drop this packet.
+			congestioned = true;
+
+			if ( !_blocking ) {
+				++_n_dropped;
+
+				if ( !_congestion_warning_printed )
+					click_chatter("[%s] Packet dropped", name().c_str());
+				_congestion_warning_printed = true;
+			}
+			else {
+				if ( !_congestion_warning_printed )
+					click_chatter("[%s] Congestion warning", name().c_str());
+				_congestion_warning_printed = true;
+			}
+		}
+		// There is space in the iqueue
+		else {
+			if ( p != NULL ) {
+				iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _internal_tx_queue_size] = p;
+				iqueue.nr_pending++;
+			}
+		}
+
+		// Emit what is in the queue
+		if ( ((int) iqueue.nr_pending > 0) || congestioned ) {
+			flush_internal_tx_queue(iqueue);
+		}
+		// We wait until burst for sending packets, so flushing timer is especially important here
+		set_flush_timer(iqueue);
+
+		// If we're in blocking mode, we loop until we can put p in the iqueue
+	} while ( unlikely(_blocking && congestioned) );
+
+	if ( likely(is_fullpush()) )
+		p->safe_kill();
+	else
+		p->kill();
 }
 
+#if HAVE_BATCH
+void
+ToBatchDevice::push_batch(int, PacketBatch *head)
+{
+	// Get the internal queue
+	TXInternalQueue &iqueue = _iqueue;
+
+	Packet *p    = head;
+	Packet *next = NULL;
+
+	BATCH_RECYCLE_START();
+
+	bool congestioned;
+
+	do {
+		congestioned = false;
+
+		// First, place the packets in the queue, while there is still place there
+		while ( iqueue.nr_pending < _internal_tx_queue_size && p ) {
+
+			if ( p != NULL ) {
+				iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _internal_tx_queue_size] = p;
+				iqueue.nr_pending++;
+			}
+			next = p->next();
+
+			BATCH_RECYCLE_UNSAFE_PACKET(p);
+
+			p = next;
+		}
+
+		// There are packets not pushed into the queue, congestion is very likely!
+		if ( p != 0 ) {
+			congestioned = true;
+			if ( !_congestion_warning_printed ) {
+				if ( !_blocking )
+					click_chatter("[%s] Packet dropped", name().c_str());
+				else
+					click_chatter("[%s] Congestion warning", name().c_str());
+				_congestion_warning_printed = true;
+			}
+		}
+
+		// Flush the queue if we have pending packets
+		if ( (int) iqueue.nr_pending > 0 ) {
+			flush_internal_tx_queue(iqueue);
+		}
+		set_flush_timer(iqueue);
+
+		// If we're in blocking mode, we loop until we can put p in the iqueue
+	} while ( unlikely(_blocking && congestioned) );
+
+	// If non-blocking, drop all packets that could not be sent
+	while (p) {
+		next = p->next();
+		BATCH_RECYCLE_UNSAFE_PACKET(p);
+		p = next;
+		++_n_dropped;
+	}
+
+	BATCH_RECYCLE_END();
+}
+#endif
 
 String
-ToBatchDevice::read_param(Element *e, void *thunk)
+ToBatchDevice::read_handler(Element *e, void *thunk)
 {
-    ToBatchDevice *td = (ToBatchDevice *)e;
-    switch((uintptr_t) thunk) {
-    case h_debug:
-	return String(td->_debug);
-    case h_signal:
-	return String(td->_signal);
-    case h_pulls:
-	return String(td->_pulls);
-    case h_q:
-	return String((bool) td->_q);
-    default:
-	return String();
-    }
-}
+	ToBatchDevice* td = static_cast<ToBatchDevice*>(e);
 
-int
-ToBatchDevice::write_param(const String &in_s, Element *e, void *vparam,
-		     ErrorHandler *errh)
-{
-    ToBatchDevice *td = (ToBatchDevice *)e;
-    String s = cp_uncomment(in_s);
-    switch ((intptr_t)vparam) {
-    case h_debug: {
-	bool debug;
-	if (!BoolArg().parse(s, debug))
-	    return errh->error("type mismatch");
-	td->_debug = debug;
-	break;
-    }
-    }
-    return 0;
+	if ( thunk == (void *) 0 )
+		return String(td->_n_sent);
+	else
+		return String(td->_n_dropped);
 }
 
 void
 ToBatchDevice::add_handlers()
 {
-    add_task_handlers(&_task);
-    add_read_handler("debug", read_param, h_debug, Handler::CHECKBOX);
-    add_read_handler("pulls", read_param, h_pulls);
-    add_read_handler("signal", read_param, h_signal);
-    add_read_handler("q", read_param, h_q);
-    add_write_handler("debug", write_param, h_debug);
+	add_read_handler("n_sent",    read_handler, 0);
+	add_read_handler("n_dropped", read_handler, 1);
 }
 
 CLICK_ENDDECLS
