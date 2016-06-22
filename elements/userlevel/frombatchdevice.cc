@@ -24,32 +24,22 @@
  * legally binding.
  */
 
-#include <click/config.h>
-#include <sys/types.h>
-#include <sys/time.h>
-
 #if !defined(__sun)
 # include <sys/ioctl.h>
 #else
 # include <sys/ioccom.h>
 #endif
 
-#include <click/etheraddress.hh>
-#include <click/error.hh>
-#include <click/straccum.hh>
-#include <click/args.hh>
-#include <click/glue.hh>
-#include <click/packet_anno.hh>
-#include <click/standard/scheduleinfo.hh>
-#include <click/userutils.hh>
-#include <unistd.h>
 #include <fcntl.h>
-
-#include <sys/socket.h>
 #include <net/if.h>
-#include <features.h>
-#include <linux/if_packet.h>
+#include <sys/socket.h>
 #include <net/ethernet.h>
+#include <linux/if_packet.h>
+
+#include <click/config.h>
+#include <click/error.hh>
+#include <click/args.hh>
+#include <click/standard/scheduleinfo.hh>
 
 #include "fakepcap.hh"
 #include "frombatchdevice.hh"
@@ -57,7 +47,7 @@
 CLICK_DECLS
 
 FromBatchDevice::FromBatchDevice()
-	: _datalink(-1), _n_recv(0), _promisc(0), _snaplen(0), _fd(-1)
+	: _task(this), _datalink(-1), _n_recv(0), _promisc(0), _snaplen(0), _fd(-1)
 {
 #if HAVE_BATCH
 	in_batch_mode = BATCH_MODE_YES;
@@ -72,32 +62,32 @@ int
 FromBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 {
 	bool promisc = false, outbound = false, sniffer = true, timestamp = true;
-	_protocol = 0;
-	_snaplen = default_snaplen;
-	_headroom = Packet::default_headroom;
-	_headroom += (4 - (_headroom + 2) % 4) % 4; // default 4/2 alignment
-	_force_ip = false;
+	_protocol   = 0;
+	_snaplen    = default_snaplen;
+	_headroom   = Packet::default_headroom;
+	_headroom  += (4 - (_headroom + 2) % 4) % 4; // default 4/2 alignment
+	_force_ip   = false;
 	_burst_size = 1;
 
 	if (Args(conf, this, errh)
-			.read_mp("DEVNAME", _ifname)
-			.read_p("PROMISC",  promisc)
-			.read_p("SNAPLEN",  _snaplen)
-			.read("SNIFFER",    sniffer)
-			.read("FORCE_IP",  _force_ip)
-			.read("PROTOCOL",  _protocol)
-			.read("OUTBOUND",  outbound)
-			.read("HEADROOM",  _headroom)
-			.read("BURST",     _burst_size)
-			.read("TIMESTAMP", timestamp)
+			.read_mp("DEVNAME",   _ifname)
+			.read_p("PROMISC",    promisc)
+			.read_p("SNAPLEN",    _snaplen)
+			.read("SNIFFER",      sniffer)
+			.read("FORCE_IP",     _force_ip)
+			.read("PROTOCOL",     _protocol)
+			.read("OUTBOUND",     outbound)
+			.read("HEADROOM",     _headroom)
+			.read("BURST",        _burst_size)
+			.read("TIMESTAMP",    timestamp)
 			.complete() < 0)
 		return -1;
 
-	if (_snaplen > 65535 || _snaplen < 14)
+	if ( _snaplen > 65535 || _snaplen < 14 )
 		return errh->error("SNAPLEN out of range");
-	if (_headroom > 8190)
+	if ( _headroom > 8190 )
 		return errh->error("HEADROOM out of range");
-	if (_burst_size <= 0)
+	if ( _burst_size <= 0 )
 		return errh->error("BURST out of range");
 	_protocol = htons(_protocol);
 
@@ -110,10 +100,61 @@ FromBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 }
 
 int
+FromBatchDevice::initialize(ErrorHandler *errh)
+{
+	if ( !_ifname )
+		return errh->error("[%s] Interface not set", name().c_str());
+
+	_fd = open_packet_socket(_ifname, errh);
+	if (_fd < 0)
+		return -1;
+
+	int promisc_ok = set_promiscuous(_fd, _ifname, _promisc);
+	if ( promisc_ok < 0 ) {
+		if (_promisc)
+			errh->warning("[%s] Cannot set promiscuous mode", name().c_str());
+		_was_promisc = -1;
+	}
+	else {
+		_was_promisc = promisc_ok;
+	}
+
+	_datalink = FAKE_DLT_EN10MB;
+
+	ScheduleInfo::initialize_task(this, &_task, true, errh);
+
+	if ( _fd >= 0 )
+		add_select(_fd, SELECT_READ);
+
+	if ( !_sniffer )
+		if (KernelFilter::device_filter(_ifname, true, errh) < 0)
+			_sniffer = true;
+
+//	click_chatter("FromBatchDevice[%s] has CPU ID %d", _ifname.c_str(), router()->home_thread_id(this));
+
+	return 0;
+}
+
+void
+FromBatchDevice::cleanup(CleanupStage stage)
+{
+	if ( stage >= CLEANUP_INITIALIZED && !_sniffer )
+		KernelFilter::device_filter(_ifname, false, ErrorHandler::default_handler());
+
+	if ( _fd >= 0 ) {
+		if ( _was_promisc >= 0 )
+			set_promiscuous(_fd, _ifname, _was_promisc);
+		close(_fd);
+	}
+
+	_fd = -1;
+}
+
+int
 FromBatchDevice::open_packet_socket(String ifname, ErrorHandler *errh)
 {
 	int fd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-	if (fd == -1)
+	if ( fd == -1 )
 		return errh->error("%s: socket: %s", ifname.c_str(), strerror(errno));
 
 	// Get interface index
@@ -121,7 +162,7 @@ FromBatchDevice::open_packet_socket(String ifname, ErrorHandler *errh)
 	memset(&ifr, 0, sizeof(ifr));
 	strncpy(ifr.ifr_name, ifname.c_str(), sizeof(ifr.ifr_name));
 	int res = ioctl(fd, SIOCGIFINDEX, &ifr);
-	if (res != 0) {
+	if ( res != 0 ) {
 		close(fd);
 		return errh->error("%s: SIOCGIFINDEX: %s", ifname.c_str(), strerror(errno));
 	}
@@ -134,7 +175,7 @@ FromBatchDevice::open_packet_socket(String ifname, ErrorHandler *errh)
 	sa.sll_protocol = htons(ETH_P_ALL);
 	sa.sll_ifindex  = ifindex;
 	res = bind(fd, (struct sockaddr *)&sa, sizeof(sa));
-	if (res != 0) {
+	if ( res != 0 ) {
 		close(fd);
 		return errh->error("Error on %s while binding: %s", ifname.c_str(), strerror(errno));
 	}
@@ -167,7 +208,7 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	mr.mr_ifindex = ifr.ifr_ifindex;
 	mr.mr_type = (promisc ? PACKET_MR_PROMISC : PACKET_MR_ALLMULTI);
 
-	if (setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0)
+	if ( setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0 )
 		return -3;
 #else
 	if ( was_promisc != (int) promisc ) {
@@ -180,64 +221,20 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	return was_promisc;
 }
 
-int
-FromBatchDevice::initialize(ErrorHandler *errh)
+bool
+FromBatchDevice::process()
 {
-	if (!_ifname)
-		return errh->error("[%s] Interface not set", name().c_str());
+//	click_chatter("FromBatchDevice[%s] from CPU: %d",
+//		_ifname.c_str(), router()->home_thread_id(this));
 
-	_fd = open_packet_socket(_ifname, errh);
-	if (_fd < 0)
-		return -1;
-
-	int promisc_ok = set_promiscuous(_fd, _ifname, _promisc);
-	if (promisc_ok < 0) {
-		if (_promisc)
-			errh->warning("[%s] Cannot set promiscuous mode", name().c_str());
-		_was_promisc = -1;
-	}
-	else {
-		_was_promisc = promisc_ok;
-	}
-
-	_datalink = FAKE_DLT_EN10MB;
-
-	if (_fd >= 0)
-		add_select(_fd, SELECT_READ);
-
-	if (!_sniffer)
-		if (KernelFilter::device_filter(_ifname, true, errh) < 0)
-			_sniffer = true;
-
-	return 0;
-}
-
-void
-FromBatchDevice::cleanup(CleanupStage stage)
-{
-	if (stage >= CLEANUP_INITIALIZED && !_sniffer)
-		KernelFilter::device_filter(_ifname, false, ErrorHandler::default_handler());
-
-	if ( _fd >= 0 ) {
-		if (_was_promisc >= 0)
-			set_promiscuous(_fd, _ifname, _was_promisc);
-		close(_fd);
-	}
-
-	_fd = -1;
-}
-
-void
-FromBatchDevice::selected(int, int)
-{
 #if HAVE_BATCH
 	PacketBatch    *head = NULL;
 	WritablePacket *last = NULL;
 #endif
 
-	int nlinux = 0;
+	int n = 0;
 
-	while ( nlinux < _burst_size ) {
+	while ( n < _burst_size ) {
 		struct sockaddr_ll sa;
 		socklen_t fromlen = sizeof(sa);
 		WritablePacket *p = Packet::make(_headroom, 0, _snaplen, 0);
@@ -258,7 +255,7 @@ FromBatchDevice::selected(int, int)
 			p->timestamp_anno().set_timeval_ioctl(_fd, SIOCGSTAMP);
 			p->set_mac_header(p->data());
 
-			++nlinux;
+			++n;
 
 			// Ready to push
 			if ( !_force_ip || fake_pcap_force_ip(p, _datalink) ) {
@@ -269,7 +266,7 @@ FromBatchDevice::selected(int, int)
 				else
 					last->set_next(p);
 				last = p;
-			// Or regularly
+				// Or regularly
 			#else
 				output(0).push(p);
 			#endif
@@ -279,6 +276,7 @@ FromBatchDevice::selected(int, int)
 			}
 		}
 		else {
+		//	click_chatter("FromBatchDevice(%s): Killed", _ifname.c_str());
 			p->kill();
 			if (len <= 0 && errno != EAGAIN)
 				click_chatter("FromBatchDevice(%s): recvfrom: %s", _ifname.c_str(), strerror(errno));
@@ -286,18 +284,40 @@ FromBatchDevice::selected(int, int)
 		}
 	}
 
-	_n_recv += nlinux;
-
 #if HAVE_BATCH
-	if (head) {
-		head->make_tail(last, nlinux);
+	if ( head && (n > 0) ) {
+		head->make_tail  (last, n);
 		output_push_batch(0, head);
 	}
 #endif
+
+	if (n > 0) {
+		_n_recv += n;
+		return true;
+	}
+	else
+		return false;
+}
+
+bool
+FromBatchDevice::run_task(Task *)
+{
+	if ( process() ) {
+		_task.fast_reschedule();
+		return true;
+	}
+	return false;
 }
 
 void
-FromBatchDevice::kernel_drops(bool& known, int& max_drops) const
+FromBatchDevice::selected(int, int)
+{
+	if ( process() )
+		_task.fast_reschedule();
+}
+
+void
+FromBatchDevice::kernel_drops(bool &known, int &max_drops) const
 {
 	known = false, max_drops = -1;
 
@@ -347,5 +367,5 @@ FromBatchDevice::add_handlers()
 }
 
 CLICK_ENDDECLS
-ELEMENT_REQUIRES(userlevel FakePcap KernelFilter)
+ELEMENT_REQUIRES(userlevel KernelFilter)
 EXPORT_ELEMENT(FromBatchDevice)

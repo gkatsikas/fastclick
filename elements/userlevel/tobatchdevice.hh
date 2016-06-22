@@ -1,9 +1,8 @@
 #ifndef CLICK_TOBATCHDEVICE_USERLEVEL_HH
 #define CLICK_TOBATCHDEVICE_USERLEVEL_HH
 
-#include <click/batchelement.hh>
-#include <click/standard/storage.hh>
 #include <click/string.hh>
+#include <click/batchelement.hh>
 
 #include "elements/userlevel/frombatchdevice.hh"
 
@@ -32,9 +31,38 @@ Keyword arguments are:
 
 String. The name of the interface where we send the packets.
 
+=item IQUEUE
+
+Integer.  Size of the internal queue, i.e. number of packets that we can buffer
+before pushing them to the NIC. If IQUEUE is bigger than BURST,
+some packets could be buffered in the internal queue when the output buffer is
+full. Defaults to 1024.
+
 =item BURST
 
 Integer. Maximum number of packets to pull per scheduling. Defaults to 1.
+Prefer to set the TIMEOUT parameter to 0 if the throughput is low as it
+will maintain performance.
+
+=item BLOCKING
+
+Boolean.  If true, when there is no more space in the output device ring, and
+the IQUEUE is full, we'll block until some packet could be sent. If false the
+packet will be dropped. Defaults to true.
+
+=item TIMEOUT
+
+Integer.  Set a timeout to flush the internal queue. It is useful under low
+throughput as it could take a long time before reaching BURST packet in the
+internal queue. The timeout is expressed in milliseconds. Setting the timer to
+0 is not a bad idea as it will schedule after the source element (such as a
+FromBatchDevice) will have finished its burst, or all incoming packets. This
+would therefore ensure that a flush is done right after all packets have been
+processed by the Click pipeline. Setting a negative value disable the timer,
+this is generally acceptable if the thoughput of this element rarely drops
+below 32000 pps (~50 Mbps with maximal size packets) with a BURST of 32, as the
+internal queue will wait on average 1 ms before containing a burst again. Defaults
+to 0 (immediate flush).
 
 =back
 
@@ -65,8 +93,7 @@ class ToBatchDevice : public BatchElement {
 		const char *class_name() const { return "ToBatchDevice"; }
 		const char *port_count() const { return PORTS_1_0; }
 		const char *processing() const { return PUSH; }
-
-		int    configure_phase() const	{ return CONFIGURE_PHASE_PRIVILEGED; }
+		int    configure_phase() const { return KernelFilter::CONFIGURE_PHASE_TODEVICE; }
 
 		int configure    (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
 		int initialize   (ErrorHandler *) 			CLICK_COLD;
@@ -76,7 +103,7 @@ class ToBatchDevice : public BatchElement {
 		String ifname() const 	{ return _ifname; }
 		int        fd() const 	{ return _fd; }
 
-		void push_packet(int port, Packet *);
+		void push_packet(int port, Packet      *);
 	#if HAVE_BATCH
 		void push_batch (int port, PacketBatch *);
 	#endif
@@ -103,12 +130,15 @@ class ToBatchDevice : public BatchElement {
 
 		// Internal queue to store packets to be emitted
 		// No need to use a Queue element anymore
+		//per_thread<TXInternalQueue> _iqueues;
 		TXInternalQueue _iqueue;
 		unsigned int    _internal_tx_queue_size;
+		Task            _task;
 
 		String          _ifname;
 		int             _fd;
 		bool            _my_fd;
+		unsigned short  _from_dev_core;
 
 		counter_t       _n_sent;
 		counter_t       _n_dropped;
@@ -119,6 +149,7 @@ class ToBatchDevice : public BatchElement {
 		bool            _congestion_warning_printed;
 
 		FromBatchDevice *find_fromdevice() const;
+		int find_fromdevice_core() const;
 		int send_packet(Packet *p);
 
 		static String read_handler(Element *e, void *thunk) CLICK_COLD;

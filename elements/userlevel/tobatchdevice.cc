@@ -2,7 +2,8 @@
  * tobatchdevice.{cc,hh} -- element writes packets to Linux-based interfaces
  * Douglas S. J. De Couto, Eddie Kohler, John Jannotti
  *
- * Transformed into a full push element with computational batching support
+ * Transformed into a full push element with an internal queue that supports
+ * both normal and batch push.
  * by Georgios Katsikas
  *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
@@ -23,33 +24,17 @@
 
 #include <click/config.h>
 #include <click/error.hh>
-#include <click/etheraddress.hh>
 #include <click/args.hh>
-#include <click/router.hh>
-#include <click/packet_anno.hh>
-#include <click/straccum.hh>
-#include <stdio.h>
-#include <unistd.h>
-
-# include <sys/socket.h>
-# include <sys/ioctl.h>
-# include <net/if.h>
-# include <net/if_packet.h>
-# include <features.h>
-# if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 1
-#  include <netpacket/packet.h>
-# else
-#  include <linux/if_packet.h>
-# endif
+#include <click/standard/scheduleinfo.hh>
 
 #include "tobatchdevice.hh"
 
 CLICK_DECLS
 
 ToBatchDevice::ToBatchDevice()
-	: 	_n_sent(0), _n_dropped(0), _fd(-1), _my_fd(false), _timeout(0),
-		_blocking(false), _congestion_warning_printed(false), _internal_tx_queue_size(-1)
-
+	: 	_task(this), _n_sent(0), _n_dropped(0), _fd(-1), _my_fd(false),
+		_timeout(0), _blocking(false), _congestion_warning_printed(false),
+		_internal_tx_queue_size(-1), _from_dev_core(0)
 {
 }
 
@@ -67,6 +52,8 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 			.read_mp("DEVNAME", _ifname)
 			.read("BURST",      _burst_size)
 			.read("IQUEUE",     _internal_tx_queue_size)
+			.read("BLOCKING",   _blocking)
+			.read("TIMEOUT",    _timeout)
 			.complete() < 0)
 		return -1;
 
@@ -83,7 +70,7 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 	}
 
 #if HAVE_BATCH
-	if (batch_mode() == BATCH_MODE_YES)
+	if ( batch_mode() == BATCH_MODE_YES )
 		errh->warning("[%s] BURST is unused with batching!", name().c_str());
 #endif
 
@@ -96,10 +83,24 @@ ToBatchDevice::find_fromdevice() const
 	Router *r = router();
 	for (int ei = 0; ei < r->nelements(); ++ei) {
 		FromBatchDevice *fd = (FromBatchDevice *) r->element(ei)->cast("FromBatchDevice");
-		if (fd && fd->ifname() == _ifname && fd->fd() >= 0)
+		if (fd && fd->ifname() == _ifname && fd->fd() >= 0) {
 			return fd;
+		}
 	}
 	return 0;
+}
+
+int
+ToBatchDevice::find_fromdevice_core() const
+{
+	Router *r = router();
+	for (int ei = 0; ei < r->nelements(); ++ei) {
+		FromBatchDevice *fd = (FromBatchDevice *) r->element(ei)->cast("FromBatchDevice");
+		if (fd && fd->ifname() == _ifname && fd->fd() >= 0) {
+			return router()->home_thread_id(fd);
+		}
+	}
+	return -1;
 }
 
 int
@@ -117,19 +118,24 @@ ToBatchDevice::initialize(ErrorHandler *errh)
 		_my_fd = true;
 	}
 
-	// check for duplicate writers
+	// Check for duplicate writers
 	void *&used = router()->force_attachment("device_writer_" + _ifname);
 	if (used)
-		return errh->error("[%s] Duplicate writer for device %<%s%>", name().c_str(), _ifname.c_str());
+		return errh->error("[%s] Duplicate writer for device: %s", name().c_str(), _ifname.c_str());
 	used = this;
 
 	// Allocate space for the internal queue
 	_iqueue.pkts = new Packet *[_internal_tx_queue_size];
 	if (_timeout >= 0) {
-		_iqueue.timeout.assign     (this);
-		_iqueue.timeout.initialize (this);
+		_iqueue.timeout.assign(this);
+		_iqueue.timeout.initialize(this);
 		_iqueue.timeout.move_thread(click_current_cpu_id());
 	}
+
+	ScheduleInfo::initialize_task(this, &_task, false, errh);
+
+//	click_chatter("  ToBatchDevice[%s] has CPU ID %d", _ifname.c_str(), router()->home_thread_id(this));
+//	click_chatter("FromBatchDevice[%s] has CPU ID %d", _ifname.c_str(), find_fromdevice_core());
 
 	return 0;
 }
@@ -178,12 +184,10 @@ ToBatchDevice::set_flush_timer(TXInternalQueue &iqueue)
 void
 ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 {
-	unsigned sent = 0;
+	unsigned short sent = 0;
 
 	do {
-		Packet *p = iqueue.pkts[iqueue.index];
-
-		if ( send_packet(p) < 0 )
+		if ( send_packet(iqueue.pkts[iqueue.index]) < 0 )
 			break;
 
 		++sent;
@@ -207,6 +211,11 @@ ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 void
 ToBatchDevice::push_packet(int, Packet *p)
 {
+//	click_chatter("ToBatchDevice[%s] from CPU: %d",	_ifname.c_str(), router()->home_thread_id(this));
+
+	if ( !p )
+		return;
+
 	// Get the internal queue
 	TXInternalQueue &iqueue = _iqueue;
 
@@ -235,10 +244,8 @@ ToBatchDevice::push_packet(int, Packet *p)
 		}
 		// There is space in the iqueue
 		else {
-			if ( p != NULL ) {
-				iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _internal_tx_queue_size] = p;
-				iqueue.nr_pending++;
-			}
+			iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _internal_tx_queue_size] = p;
+			iqueue.nr_pending++;
 		}
 
 		// Emit what is in the queue
@@ -289,7 +296,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 		}
 
 		// There are packets not pushed into the queue, congestion is very likely!
-		if ( p != 0 ) {
+		if ( p ) {
 			congestioned = true;
 			if ( !_congestion_warning_printed ) {
 				if ( !_blocking )
@@ -301,7 +308,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 		}
 
 		// Flush the queue if we have pending packets
-		if ( (int) iqueue.nr_pending > 0 ) {
+		if ( ((int) iqueue.nr_pending > 0) || congestioned ) {
 			flush_internal_tx_queue(iqueue);
 		}
 		set_flush_timer(iqueue);
@@ -310,7 +317,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 	} while ( unlikely(_blocking && congestioned) );
 
 	// If non-blocking, drop all packets that could not be sent
-	while (p) {
+	while ( p ) {
 		next = p->next();
 		BATCH_RECYCLE_UNSAFE_PACKET(p);
 		p = next;
@@ -324,7 +331,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 String
 ToBatchDevice::read_handler(Element *e, void *thunk)
 {
-	ToBatchDevice* td = static_cast<ToBatchDevice*>(e);
+	ToBatchDevice *td = static_cast<ToBatchDevice*>(e);
 
 	if ( thunk == (void *) 0 )
 		return String(td->_n_sent);

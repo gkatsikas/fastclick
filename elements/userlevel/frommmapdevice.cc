@@ -219,6 +219,7 @@ FromMMapDevice::run_task(Task *t)
 	return (ret == 0);
 }
 
+#if HAVE_BATCH
 void
 FromMMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring) {
 	union frame_map ppd;
@@ -326,6 +327,7 @@ FromMMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring) {
 	//click_chatter("[%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
 	//				ifname.c_str(), recv_pkts, recv_bytes, frame_num);
 }
+#endif
 
 unsigned int
 FromMMapDevice::receive_packets()

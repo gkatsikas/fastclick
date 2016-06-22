@@ -1,7 +1,9 @@
 #ifndef CLICK_FROMBATCHDEVICE_USERLEVEL_HH
 #define CLICK_FROMBATCHDEVICE_USERLEVEL_HH
 
+#include <click/task.hh>
 #include <click/batchelement.hh>
+
 #include "elements/userlevel/kernelfilter.hh"
 
 CLICK_DECLS
@@ -129,7 +131,7 @@ Returns a string indicating the encapsulation type on this link. Can be
 class FromBatchDevice : public BatchElement {
 	public:
 
-		FromBatchDevice()  CLICK_COLD;
+		FromBatchDevice () CLICK_COLD;
 		~FromBatchDevice() CLICK_COLD;
 
 		const char *class_name() const	{ return "FromBatchDevice"; }
@@ -147,13 +149,17 @@ class FromBatchDevice : public BatchElement {
 		inline String ifname() const	{ return _ifname; }
 		inline int        fd() const	{ return _fd; }
 
-		void       selected          (int fd, int mask);
+		void       selected(int fd, int mask);
+		bool       run_task(Task *task);
+		bool       process ();
+
 		static int open_packet_socket(String, ErrorHandler *);
 		static int set_promiscuous   (int, String, bool);
-		void       kernel_drops      (bool& known, int& max_drops) const;
+		void       kernel_drops      (bool &known, int &max_drops) const;
 
 	private:
 
+		Task      _task;
 		int       _fd;
 
 		bool      _force_ip;
@@ -163,17 +169,19 @@ class FromBatchDevice : public BatchElement {
 		counter_t _n_recv;
 
 		String    _ifname;
-		bool      _sniffer : 1;
-		bool      _promisc : 1;
-		bool      _outbound : 1;
-		bool      _timestamp : 1;
+		bool      _sniffer     : 1;
+		bool      _promisc     : 1;
+		bool      _outbound    : 1;
+		bool      _timestamp   : 1;
 		int       _was_promisc : 2;
 		int       _snaplen;
 		uint16_t  _protocol;
 		unsigned  _headroom;
 
 		static String read_handler (Element*, void*) CLICK_COLD;
-		static int    write_handler(const String&, Element*, void*, ErrorHandler*) CLICK_COLD;
+		static int    write_handler(
+			const String &, Element *, void *, ErrorHandler *
+		) CLICK_COLD;
 };
 
 CLICK_ENDDECLS
