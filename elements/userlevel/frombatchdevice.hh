@@ -1,7 +1,6 @@
 #ifndef CLICK_FROMBATCHDEVICE_USERLEVEL_HH
 #define CLICK_FROMBATCHDEVICE_USERLEVEL_HH
 
-#include <click/task.hh>
 #include <click/batchelement.hh>
 
 #include "elements/userlevel/kernelfilter.hh"
@@ -150,8 +149,6 @@ class FromBatchDevice : public BatchElement {
 		inline int        fd() const	{ return _fd; }
 
 		void       selected(int fd, int mask);
-		bool       run_task(Task *task);
-		bool       process ();
 
 		static int open_packet_socket(String, ErrorHandler *);
 		static int set_promiscuous   (int, String, bool);
@@ -159,16 +156,13 @@ class FromBatchDevice : public BatchElement {
 
 	private:
 
-		Task      _task;
+		String    _ifname;
 		int       _fd;
 
 		bool      _force_ip;
 		int       _burst_size;
 		int       _datalink;
 
-		counter_t _n_recv;
-
-		String    _ifname;
 		bool      _sniffer     : 1;
 		bool      _promisc     : 1;
 		bool      _outbound    : 1;
@@ -177,6 +171,8 @@ class FromBatchDevice : public BatchElement {
 		int       _snaplen;
 		uint16_t  _protocol;
 		unsigned  _headroom;
+
+		counter_t _n_recv;
 
 		static String read_handler (Element*, void*) CLICK_COLD;
 		static int    write_handler(

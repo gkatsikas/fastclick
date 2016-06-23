@@ -32,8 +32,9 @@
 CLICK_DECLS
 
 ToBatchDevice::ToBatchDevice()
-	: 	_task(this), _n_sent(0), _n_dropped(0), _fd(-1), _my_fd(false),
-		_timeout(0), _blocking(false), _congestion_warning_printed(false),
+	: 	_task(this), _n_sent(0), _n_dropped(0),
+		_fd(-1), _my_fd(false),	_timeout(0), _blocking(false),
+		_congestion_warning_printed(false), 
 		_internal_tx_queue_size(-1), _from_dev_core(0)
 {
 }
@@ -106,6 +107,8 @@ ToBatchDevice::find_fromdevice_core() const
 int
 ToBatchDevice::initialize(ErrorHandler *errh)
 {
+	//_timer.initialize(this);
+
 	FromBatchDevice *fd = find_fromdevice();
 
 	if (fd && fd->fd() >= 0)
@@ -134,6 +137,9 @@ ToBatchDevice::initialize(ErrorHandler *errh)
 
 	ScheduleInfo::initialize_task(this, &_task, false, errh);
 
+//	ScheduleInfo::join_scheduler(this, &_task, errh);
+//	_signal = Notifier::upstream_empty_signal(this, 0, &_task);
+
 //	click_chatter("  ToBatchDevice[%s] has CPU ID %d", _ifname.c_str(), router()->home_thread_id(this));
 //	click_chatter("FromBatchDevice[%s] has CPU ID %d", _ifname.c_str(), find_fromdevice_core());
 
@@ -155,8 +161,16 @@ int
 ToBatchDevice::send_packet(Packet *p)
 {
 	if ( !p || p->length() == 0 )
-		return -1;
-	return send(_fd, p->data(), p->length(), 0);
+		return -EINVAL;
+
+	int r = 0;
+	errno = 0;
+
+	r = send(_fd, p->data(), p->length(), 0);
+
+	if (r >= 0)
+		return 0;
+	return errno ? -errno : -EINVAL;
 }
 
 inline void
@@ -204,7 +218,7 @@ ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 	_n_sent += sent;
 
 	// If ring is empty, reset the index to avoid wrap ups
-	if (iqueue.nr_pending == 0)
+	if ( iqueue.nr_pending == 0 )
 		iqueue.index = 0;
 }
 
@@ -220,6 +234,7 @@ ToBatchDevice::push_packet(int, Packet *p)
 	TXInternalQueue &iqueue = _iqueue;
 
 	bool congestioned;
+
 	do {
 		congestioned = false;
 
@@ -248,7 +263,6 @@ ToBatchDevice::push_packet(int, Packet *p)
 			iqueue.nr_pending++;
 		}
 
-		// Emit what is in the queue
 		if ( ((int) iqueue.nr_pending > 0) || congestioned ) {
 			flush_internal_tx_queue(iqueue);
 		}
@@ -258,10 +272,13 @@ ToBatchDevice::push_packet(int, Packet *p)
 		// If we're in blocking mode, we loop until we can put p in the iqueue
 	} while ( unlikely(_blocking && congestioned) );
 
-	if ( likely(is_fullpush()) )
+	// Time to kill
+	if ( likely(is_fullpush()) ) {
 		p->safe_kill();
-	else
+	}
+	else {
 		p->kill();
+	}
 }
 
 #if HAVE_BATCH

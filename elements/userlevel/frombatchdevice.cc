@@ -47,7 +47,7 @@
 CLICK_DECLS
 
 FromBatchDevice::FromBatchDevice()
-	: _task(this), _datalink(-1), _n_recv(0), _promisc(0), _snaplen(0), _fd(-1)
+	: _datalink(-1), _n_recv(0), _promisc(0), _snaplen(0), _fd(-1)
 {
 #if HAVE_BATCH
 	in_batch_mode = BATCH_MODE_YES;
@@ -120,8 +120,6 @@ FromBatchDevice::initialize(ErrorHandler *errh)
 	}
 
 	_datalink = FAKE_DLT_EN10MB;
-
-	ScheduleInfo::initialize_task(this, &_task, true, errh);
 
 	if ( _fd >= 0 )
 		add_select(_fd, SELECT_READ);
@@ -211,7 +209,7 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	if ( setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0 )
 		return -3;
 #else
-	if ( was_promisc != (int) promisc ) {
+	if ( was_promisc != promisc ) {
 		ifr.ifr_flags = (promisc ? ifr.ifr_flags | IFF_PROMISC : ifr.ifr_flags & ~IFF_PROMISC);
 		if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0)
 			return -3;
@@ -221,8 +219,8 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	return was_promisc;
 }
 
-bool
-FromBatchDevice::process()
+void
+FromBatchDevice::selected(int, int)
 {
 //	click_chatter("FromBatchDevice[%s] from CPU: %d",
 //		_ifname.c_str(), router()->home_thread_id(this));
@@ -290,30 +288,6 @@ FromBatchDevice::process()
 		output_push_batch(0, head);
 	}
 #endif
-
-	if (n > 0) {
-		_n_recv += n;
-		return true;
-	}
-	else
-		return false;
-}
-
-bool
-FromBatchDevice::run_task(Task *)
-{
-	if ( process() ) {
-		_task.fast_reschedule();
-		return true;
-	}
-	return false;
-}
-
-void
-FromBatchDevice::selected(int, int)
-{
-	if ( process() )
-		_task.fast_reschedule();
 }
 
 void

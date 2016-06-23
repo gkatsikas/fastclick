@@ -2,6 +2,7 @@
 #define CLICK_TOBATCHDEVICE_USERLEVEL_HH
 
 #include <click/string.hh>
+#include <click/notifier.hh>
 #include <click/batchelement.hh>
 
 #include "elements/userlevel/frombatchdevice.hh"
@@ -114,7 +115,7 @@ class ToBatchDevice : public BatchElement {
 			public:
 				TXInternalQueue() : pkts(0), index(0), nr_pending(0) { }
 
-				// Array of DPDK Buffers
+				// Array of Click packets
 				Packet **pkts;
 				// Index of the first valid packet in the packets array
 				unsigned int index;
@@ -130,10 +131,11 @@ class ToBatchDevice : public BatchElement {
 
 		// Internal queue to store packets to be emitted
 		// No need to use a Queue element anymore
-		//per_thread<TXInternalQueue> _iqueues;
 		TXInternalQueue _iqueue;
 		unsigned int    _internal_tx_queue_size;
+
 		Task            _task;
+		NotifierSignal  _signal;
 
 		String          _ifname;
 		int             _fd;
