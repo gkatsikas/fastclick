@@ -87,7 +87,7 @@ typedef struct ether_header_s ether_header_t;
 #include <click/vector.hh>
 #include <click/string.hh>
 
-#define MEMORY_BARRIER() 		asm volatile("" ::: "memory")
+#define MEMORY_BARRIER()	asm volatile("" ::: "memory")
 
 #ifndef __aligned_tpacket
 # define __aligned_tpacket	__attribute__((aligned(TPACKET_ALIGNMENT)))
@@ -97,7 +97,7 @@ typedef struct ether_header_s ether_header_t;
 # define __align_tpacket(x)	__attribute__((aligned(TPACKET_ALIGN(x))))
 #endif
 
-#define ALIGN_8(x)		(((x) + 8 - 1) & ~(8 - 1))
+#define ALIGN_8(x)	(((x) + 8 - 1) & ~(8 - 1))
 
 enum Mode {
 	TX_MODE,
@@ -172,10 +172,11 @@ class MMapDevice {
 		static int MTU_SIZE;
 		static int BATCH_SIZE;
 
-		static int initialize    (ErrorHandler *errh);
-		static int static_cleanup();
-		static int add_rx_device (const String ifname, unsigned short burst_size);
-		static int add_tx_device (const String ifname, unsigned short burst_size);
+		static int  initialize    (ErrorHandler *errh);
+		static int  static_cleanup();
+		static void set_debug_info(bool &verbose, bool &debug);
+		static int  add_rx_device (const String ifname, unsigned short burst_size);
+		static int  add_tx_device (const String ifname, unsigned short burst_size);
 
 		// MMap interface
 		static struct ring * get_ring    (const String ifname);
@@ -218,13 +219,13 @@ class MMapDevice {
 		);
 	#endif
 
-		static int  tx_kernel_ready        (void *base, int version);
-		static void tx_user_ready          (void *base, int version);
+		static int  tx_kernel_ready (void *base, int version);
+		static void tx_user_ready   (void *base, int version);
 
-		static int  rx_kernel_ready        (void *base, int version);
-		static void rx_user_ready          (void *base, int version);
+		static int  rx_kernel_ready (void *base, int version);
+		static void rx_user_ready   (void *base, int version);
 
-		static void print_frame        (void *frame, size_t len);
+		static void print_frame     (void *frame, size_t len);
 
 		struct DevInfo {
 			bool rx;
@@ -233,40 +234,48 @@ class MMapDevice {
 
 			unsigned short burst_size;
 
+			counter_t tx_send_calls;
 			counter_t tx_total_bytes;
 			counter_t rx_total_bytes;
 
+			counter_t rx_recv_calls;
 			counter_t tx_total_packets;
 			counter_t rx_total_packets;
 
 			inline DevInfo() :	rx(false), tx(false), promisc(false),
 								burst_size(32),
 								tx_total_bytes(0), rx_total_bytes(0),
-								tx_total_packets(0), rx_total_packets(0) {};
+								tx_total_packets(0), rx_total_packets(0),
+								tx_send_calls(0), rx_recv_calls(0) {};
 
 			inline DevInfo(unsigned short burst) :	
 								rx(false), tx(false), promisc(false),
 								burst_size(burst),
 								tx_total_bytes(0), rx_total_bytes(0),
-								tx_total_packets(0), rx_total_packets(0) {};
+								tx_total_packets(0), rx_total_packets(0),
+								tx_send_calls(0), rx_recv_calls(0) {};
 
 			inline unsigned short get_burst_size() { return burst_size; };
 
-			inline void update_tx_info(counter_t tx_pkts, counter_t tx_bytes) {
-				assert( (tx_pkts >= 0) && (tx_bytes >= 0) );
+			inline void update_tx_info(counter_t tx_pkts, counter_t tx_bytes, counter_t tx_calls=1) {
+				assert( (tx_pkts >= 0) && (tx_bytes >= 0) && (tx_calls > 0) );
 				tx_total_bytes   += tx_bytes;
 				tx_total_packets += tx_pkts;
+				tx_send_calls    += tx_calls;
 			};
 
-			inline void update_rx_info(counter_t rx_pkts, counter_t rx_bytes) {
-				assert( (rx_pkts >= 0) && (rx_bytes >= 0) );
+			inline void update_rx_info(counter_t rx_pkts, counter_t rx_bytes, counter_t rx_calls=1) {
+				assert( (rx_pkts >= 0) && (rx_bytes >= 0) && (rx_calls > 0) );
 				rx_total_bytes   += rx_bytes;
 				rx_total_packets += rx_pkts;
+				rx_recv_calls    += rx_calls;
 			};
 		};
 
 	private:
 		//////////////// Data structures to manage a set of devices ////////////////
+		static bool                           _debug;
+		static bool                           _verbose;
 		static bool                           _is_initialized;
 		static HashMap<String, DevInfo>       _devs;
 		static HashMap<String, struct ring *> _ring_pool;
@@ -274,7 +283,7 @@ class MMapDevice {
 
 
 		////////////////// Internal decomposition of ring methods //////////////////
-		// TPCAKET ver.1 and ver.2 are supported
+		// TPACKET ver.1 and ver.2 are supported
 		static int  _v1_tx_kernel_ready    (struct tpacket_hdr  *hdr);
 		static void _v1_tx_user_ready      (struct tpacket_hdr  *hdr);
 		static int  _v2_tx_kernel_ready    (struct tpacket2_hdr *hdr);
@@ -293,7 +302,7 @@ class MMapDevice {
 		static int  test_user_bit_width  (void);
 		static int  test_kernel_bit_width(void);
 
-		// Device managements
+		// Device management
 		static int  initialize_device(const String ifname, DevInfo &info) CLICK_COLD;
 		static int  add_device       (
 			const String ifname, Mode mode, unsigned short burst_size

@@ -24,7 +24,6 @@
 #include <sys/ioctl.h>        /* ioctl */
 #include <arpa/inet.h>        /* htons, ntohs */
 #include <sys/socket.h>       /* socket */
-#include <sys/timerfd.h>      /* timerfd_create etc. */
 
 #include <net/if.h>           /* if_nametoindex */
 #include <netinet/udp.h>      /* udphdr  */
@@ -38,15 +37,14 @@
 CLICK_DECLS
 
 int  MMapDevice::NB_BLOCKS       = 128;
-int  MMapDevice::BLOCK_SIZE      = sysconf(_SC_PAGESIZE) << 3;
+int  MMapDevice::BLOCK_SIZE      = sysconf(_SC_PAGESIZE) << 1;
 int  MMapDevice::MTU_SIZE        = 1526;
+bool MMapDevice::_debug          = false;
+bool MMapDevice::_verbose        = false;
 bool MMapDevice::_is_initialized = false;
 
 HashMap<String, MMapDevice::DevInfo> MMapDevice::_devs;
 HashMap<String, struct ring *>       MMapDevice::_ring_pool;
-
-static unsigned short BATCH_SIZE  = 32;
-static unsigned short DEF_SNAPLEN = 2046;
 
 int
 MMapDevice::initialize(ErrorHandler *errh)
@@ -54,8 +52,9 @@ MMapDevice::initialize(ErrorHandler *errh)
 	if ( _is_initialized )
 		return 0;
 
-	click_chatter("Initializing MMap");
 	_is_initialized = true;
+	if ( _verbose )
+		click_chatter("[MMap Init] Successful");
 
 	return 0;
 }
@@ -67,9 +66,14 @@ MMapDevice::static_cleanup()
 		return 0;
 
 	for ( HashMap<String, DevInfo>::const_iterator it = _devs.begin();
-			it != _devs.end(); ++it) {
+			it != _devs.end(); ++it )
 		unmap_ring(it.key());
-	}
+}
+
+void
+MMapDevice::set_debug_info(bool &verbose, bool &debug) {
+	_verbose = verbose;
+	_debug   = debug;
 }
 
 bool
@@ -84,19 +88,19 @@ MMapDevice::has_device(const String ifname)
 int
 MMapDevice::add_device(const String ifname, Mode mode, unsigned short burst_size)
 {
-	/*if ( _is_initialized ) {
-		click_chatter("Trying to configure MMap device after initialization");
-		return -1;
-	}*/
-
 	DevInfo *info = _devs.findp(ifname);
-	if (!info) {
-		click_chatter("Adding %s device %s", mode==RX_MODE? "Rx":"Tx", ifname.c_str());
+	if ( !info ) {
 		_devs.insert(ifname, DevInfo(burst_size));
 		info = _devs.findp(ifname);
+		if ( _verbose )
+			click_chatter("[MMap Dev] Added %s device %s", mode==RX_MODE? "Rx":"Tx", ifname.c_str());
+	}
+	else {
+		if ( _verbose )
+			click_chatter("[MMap Dev] Added %s device %s", mode==RX_MODE? "Rx":"Tx", ifname.c_str());
 	}
 
-	if (mode == RX_MODE) {
+	if ( mode == RX_MODE ) {
 		info->rx = true;
 	}
 	else {
@@ -121,14 +125,15 @@ MMapDevice::add_tx_device(const String ifname, unsigned short burst_size)
 struct ring *
 MMapDevice::get_ring(const String ifname)
 {
-	if ( !has_device(ifname) ) return NULL;
+	if ( !has_device(ifname) )
+		return NULL;
 	return _ring_pool[ifname];
 }
 
 struct ring *
 MMapDevice::alloc_ring(const String ifname)
 {
-	if ( has_device(ifname) && (_ring_pool[ifname] != NULL) ) {
+	if ( has_device(ifname) && _ring_pool[ifname] ) {
 		click_chatter("[%s] [Allocate Ring] Ring already allocated", ifname.c_str());
 		return _ring_pool[ifname];
 	}
@@ -145,7 +150,9 @@ MMapDevice::alloc_ring(const String ifname)
 		ring->rx_rd_addr = NULL;
 		ring->tx_rd_addr = NULL;
 	}
-	click_chatter("[%s] [Allocate Ring] Successful allocation", ifname.c_str());
+
+	if ( _verbose )
+		click_chatter("[%s] [Allocate Ring] Successful allocation", ifname.c_str());
 
 	// Add it to the map
 	_ring_pool.insert(ifname, ring);
@@ -181,7 +188,7 @@ MMapDevice::open_socket(const String ifname, struct ring *ring, int ver)
 int
 MMapDevice::setup_ring(const String ifname, struct ring *ring, int version)
 {
-	if ( !has_device(ifname) || (ring == NULL) ) {
+	if ( !has_device(ifname) || ( !ring ) ) {
 		click_chatter("[%s] [Setup Ring] Failed to identify this device", ifname.c_str());
 		return -1;
 	}
@@ -216,12 +223,13 @@ MMapDevice::setup_ring(const String ifname, struct ring *ring, int version)
 
 	ring->rd_len = ring->rd_num * sizeof(*ring->rd);
 	ring->rd     = (struct iovec *) malloc(ring->rd_len);
-	if (ring->rd == NULL) {
+	if ( !ring->rd ) {
 		click_chatter("[%s] [Setup Ring] Failed to allocate ring descriptors", ifname.c_str());
 		return -1;
 	}
 
-	click_chatter("[%s] [Setup Ring] Successfull", ifname.c_str());
+	if ( _verbose )
+		click_chatter("[%s] [Setup Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -229,13 +237,13 @@ MMapDevice::setup_ring(const String ifname, struct ring *ring, int version)
 int
 MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 {
-	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [MMap Ring] Failed to identify this device", ifname.c_str());
+	if ( !has_device(ifname) || !ring ) {
+		click_chatter("[%s] [MMap  Ring] Failed to identify this device", ifname.c_str());
 		return -1;
 	}
 
 	if ( (ring->mmap_len <= 0) || (ring->sock_fd <= 0) ) {
-		click_chatter("[%s] [MMap Ring] Invalid configuration", ifname.c_str());
+		click_chatter("[%s] [MMap  Ring] Invalid configuration", ifname.c_str());
 		return -1;
 	}
 
@@ -244,7 +252,7 @@ MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 		MAP_SHARED | MAP_LOCKED | MAP_POPULATE, ring->sock_fd, 0
 	);
 	if ( ring->mmap_base == MAP_FAILED ) {
-		click_chatter("[%s] [MMap Ring] Failed to map memory region", ifname.c_str());
+		click_chatter("[%s] [MMap  Ring] Failed to map memory region", ifname.c_str());
 		return -1;
 	}
 
@@ -263,7 +271,8 @@ MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 	ring->tx_rd_addr = (char *)ring->mmap_base + ring->rx_rd_size;
 	ring->tx_rd_idx  = ring->rx_rd_num;
 
-	click_chatter("[%s] [MMap Ring] Successfull", ifname.c_str());
+	if ( _verbose )
+		click_chatter("[%s] [MMap  Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -271,8 +280,8 @@ MMapDevice::mmap_ring(const String ifname, struct ring *ring)
 int
 MMapDevice::bind_ring(const String ifname, struct ring *ring)
 {
-	if ( !has_device(ifname) || (ring == NULL) ) {
-		click_chatter("[%s] [Walk Ring] Failed to find memory region for this device", ifname.c_str());
+	if ( !has_device(ifname) || !ring ) {
+		click_chatter("[%s] [Walk  Ring] Failed to find memory region for this device", ifname.c_str());
 		return -1;
 	}
 
@@ -284,14 +293,15 @@ MMapDevice::bind_ring(const String ifname, struct ring *ring)
 	ring->link_layer.sll_halen    = 0;
 
 	int ret = bind(ring->sock_fd, (struct sockaddr *) &ring->link_layer, sizeof(ring->link_layer));
-	if (ret == -1) {
-		click_chatter("[%s] [Bind Ring] Could not bind to %d", ifname.c_str(), ring->sock_fd);
+	if ( ret == -1 ) {
+		click_chatter("[%s] [Bind  Ring] Could not bind to %d", ifname.c_str(), ring->sock_fd);
 		return -1;
 	}
 
 	ring->ifname = ifname;
 
-	click_chatter("[%s] [Bind Ring] Successfull", ifname.c_str());
+	if ( _verbose )
+		click_chatter("[%s] [Bind  Ring] Successfull", ifname.c_str());
 
 	return 0;
 }
@@ -299,7 +309,7 @@ MMapDevice::bind_ring(const String ifname, struct ring *ring)
 int
 MMapDevice::setup_poll(const String ifname, struct ring *ring, Mode mode)
 {
-	if ( !has_device(ifname) || (ring == NULL) ) {
+	if ( !has_device(ifname) || !ring ) {
 		click_chatter("[%s] [Setup Poll] Failed to identify device", ifname.c_str());
 		return -1;
 	}
@@ -319,14 +329,13 @@ MMapDevice::setup_poll(const String ifname, struct ring *ring, Mode mode)
 		ring->tx_pfd.fd      = ring->sock_fd;
 		ring->tx_pfd.events  = POLLOUT | POLLERR;
 		ring->tx_pfd.revents = 0;
-
-		return 0;
 	}
-
-	memset(&ring->rx_pfd, 0, sizeof(ring->rx_pfd));
-	ring->rx_pfd.fd      = ring->sock_fd;
-	ring->rx_pfd.events  = POLLIN | POLLERR;
-	ring->rx_pfd.revents = 0;
+	else {
+		memset(&ring->rx_pfd, 0, sizeof(ring->rx_pfd));
+		ring->rx_pfd.fd      = ring->sock_fd;
+		ring->rx_pfd.events  = POLLIN | POLLERR;
+		ring->rx_pfd.revents = 0;
+	}
 
 	return 0;
 }
@@ -334,26 +343,28 @@ MMapDevice::setup_poll(const String ifname, struct ring *ring, Mode mode)
 int
 MMapDevice::unmap_ring(const String ifname)
 {
-	if ( !has_device(ifname) || (_ring_pool[ifname] == NULL) ) {
-		click_chatter("[%s] [MMap Free] Failed to map memory region", ifname.c_str());
+	if ( !has_device(ifname) || !_ring_pool[ifname] ) {
+		click_chatter("[%s] [MMap  Free] Failed to map memory region", ifname.c_str());
 		return -1;
 	}
 
 	struct ring *ring = _ring_pool[ifname];
 
-	/* Release shared memory */
+	// Release shared memory
 	if ( ring->mmap_base != (void *)-1 ) {
 		munmap(ring->mmap_base, ring->mmap_len);
 		ring->mmap_base = (void *)-1;
 	}
 
-	/* Close socket */
-	if( ring->sock_fd >= 0 ) {
-		close(ring->sock_fd);
-		ring->sock_fd = -1;
-	}
+	// Close the socket
+	if ( close_socket(ifname, ring) < 0 )
+		return -1;
 
+	// Release the ring data structure for this device
 	free(_ring_pool[ifname]);
+
+	if ( _verbose )
+		click_chatter("[%s] [MMap  Free] Memory released", ifname.c_str());
 
 	return 0;
 }
@@ -361,45 +372,53 @@ MMapDevice::unmap_ring(const String ifname)
 int
 MMapDevice::close_socket(const String ifname, struct ring *ring)
 {
+	if ( !has_device(ifname) || !_ring_pool[ifname] ) {
+		click_chatter("[%s] [Close Socket] Failed to find memory region for this device", ifname.c_str());
+		return -1;
+	}
+	
+	if( ring->sock_fd >= 0 ) {
+		close(ring->sock_fd);
+		ring->sock_fd = -1;
+
+		if ( _verbose )
+			click_chatter("[%s] [Close Socket] Done", ifname.c_str());
+	}
+
 	return 0;
 }
 
 int
 MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *p)
 {
-	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device", ifname.c_str());
+	if ( !ring || (ring->ifname != ifname) ) {
+		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device",
+			ifname.c_str());
 		return -1;
 	}
 
 	union frame_map ppd;
-	int sock = ring->sock_fd;
 
 	if ( !p ) {
-		click_chatter("[%s] [Walk Tx Ring] Bad packet\n", ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Bad packet", ifname.c_str());
 		return -1;
 	}
 	size_t packet_len = p->length();
 
-	click_chatter("[%s] [Walk Tx Ring] Ring %p\n", ifname.c_str(), ring);
-
 	DevInfo *info = _devs.findp(ifname);
 	if ( !info ) {
-		click_chatter("[%s] [Walk Tx Ring] Device not accessible\n", ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Device not accessible", ifname.c_str());
 		return -1;
 	}
 
-	counter_t sent_pkts = 0;
+	counter_t sent_pkts  = 0;
 	counter_t sent_bytes = 0;
 
-	///////////////////////////////////////////////////////////
-	// IMPORTANT: Tx descriptors start right after the Rx ones
-	///////////////////////////////////////////////////////////
-	//unsigned int frame_num = ring->rx_rd_num;
+	// Where are we in the ring?
 	unsigned int frame_num = ring->tx_rd_idx;
 
 	// Poll for more
-	poll(&ring->tx_pfd, 1, 1);
+	poll(&ring->tx_pfd, 1, 0);
 
 	while (	tx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) ) {
 		ppd.raw = ring->rd[frame_num].iov_base;
@@ -413,11 +432,13 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 					(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
 					p->data(), packet_len
 				);
-				
-				//print_frame(
-				//	(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
-				//	packet_len
-				//);
+
+				/*
+				print_frame(
+					(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
+					packet_len
+				);
+				*/
 
 				sent_bytes += ppd.v1->tp_h.tp_snaplen;
 				break;
@@ -431,10 +452,12 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 					p->data(), packet_len
 				);
 
-				//print_frame(
-				//	(uint8_t *) ppd.raw + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll),
-				//	packet_len
-				//);
+				/*
+				print_frame(
+					(uint8_t *) ppd.raw + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll),
+					packet_len
+				);
+				*/
 
 				sent_bytes += ppd.v2->tp_h.tp_snaplen;
 				break;
@@ -453,72 +476,64 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 			frame_num = ring->rx_rd_num;
 		}
 
+		// We transmit only one packet
 		break;
 	}
 
-	int ret = sendto(sock, NULL, 0, 0, NULL, 0);
+	// Transmit the contents of the Tx ring buffers
+	int ret = sendto(ring->sock_fd, NULL, 0, 0, NULL, 0);
 	if ( ret < 0 ) {
-		click_chatter("[%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer", ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer",
+			ifname.c_str());
 		return -1;
 	}
 
+	// Update the statistics
 	info->update_tx_info(sent_pkts, sent_bytes);
 	ring->tx_rd_idx = frame_num;
 
-//	click_chatter("[%s] [Walk Tx Ring] Batch of %d packets (%u bytes) sent\n", ifname.c_str(), sent_pkts, sent_bytes);
+	//click_chatter("[%s] [Walk Tx Ring] Sent %d packets (%u bytes)",
+	//		ifname.c_str(), sent_pkts, sent_bytes);
 
 	return 0;
 }
 
-/*
 #if HAVE_BATCH
 int
 MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBatch *batch)
 {
-	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device", ifname.c_str());
-		return -1;
-	}
-
 	union frame_map ppd;
-	int sock = ring->sock_fd;
 
 	if ( !batch ) {
-		click_chatter("[%s] [Tx thread] Bad packet batch\n", ifname.c_str());
+		click_chatter("[%s] [Walk Tx Ring] Bad packet batch", ifname.c_str());
 		return -1;
 	}
 
 	DevInfo *info = _devs.findp(ifname);
-	if ( !info ) {
-		click_chatter("[%s] [Tx thread] Device not accessible\n", ifname.c_str());
-		return -1;
-	}
 
-	counter_t sent_pkts  = 0;
-	counter_t sent_bytes = 0;
+	size_t packet_len;
+	counter_t sent_pkts  = 0, sent_bytes = 0;
 	const unsigned short burst_size = batch->count();
 
-	///////////////////////////////////////////////////////////
-	// IMPORTANT: Tx descriptors start right after the Rx ones
-	///////////////////////////////////////////////////////////
+	// Where are we in the ring?
 	unsigned int frame_num = ring->tx_rd_idx;
 	Packet* current = batch;
-	bool empty = false;
+
 //	click_chatter("[%s] [Tx thread] Ring %p to transmit %d packets\n", ifname.c_str(), ring, burst_size);
 
-	while ( (sent_pkts < burst_size) && !empty ) {
+	while ( (sent_pkts < burst_size) && current ) {
+
+		// Poll for more
+		poll(&ring->tx_pfd, 1, 0);
 
 		while (
-			tx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) &&	(sent_pkts < burst_size)
+			tx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) && current
 		) {
-		//	click_chatter("[%s] [Tx thread] START\n", ifname.c_str());
-			Packet* next = current->next();
-
 			ppd.raw = ring->rd[frame_num].iov_base;
 
-			// The length of the cuurent packet in the batch
-			size_t packet_len = current->length();
-		//	click_chatter("[%s] [Tx thread] Packet %d with length %d bytes\n", ifname.c_str(), sent_pkts, packet_len);
+			packet_len = current->length();
+			//click_chatter("[%s] [Tx thread] Packet %d with length %d bytes\n",
+			//		ifname.c_str(), sent_pkts, packet_len);
 
 			switch (ring->version) {
 				case TPACKET_V1:
@@ -529,12 +544,13 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 						(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
 						current->data(), packet_len
 					);
-					
-					//print_frame(
-					//	(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
-					//	packet_len
-					//);
-					//
+
+					/*
+					print_frame(
+						(uint8_t *) ppd.raw + TPACKET_HDRLEN - sizeof(struct sockaddr_ll),
+						packet_len
+					);
+					*/
 
 					sent_bytes += ppd.v1->tp_h.tp_snaplen;
 					break;
@@ -548,93 +564,72 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 						current->data(), packet_len
 					);
 
-					//print_frame(
-					//	(uint8_t *) ppd.raw + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll),
-					//	packet_len
-					//);
+					/*
+					print_frame(
+						(uint8_t *) ppd.raw + TPACKET2_HDRLEN - sizeof(struct sockaddr_ll),
+						packet_len
+					);
+					*/
 
 					sent_bytes += ppd.v2->tp_h.tp_snaplen;
 					break;
+
 				default:
-					click_chatter("[%s] [Tx thread] Bad TPCAKET version\n", ifname.c_str());
+					click_chatter("[%s] [Walk Tx Ring] Bad TPACKET version", ifname.c_str());
 					return -1;
 			}
 
 			sent_pkts++;
-			current = next;
+			current = current->next();
 
 			tx_user_ready(ppd.raw, ring->version);
 
 			// Circular logic of the Tx ring buffer.
 			// It starts right after the end of the Rx ring buffer.
-		//	click_chatter("[%s] [Tx thread] Current FD %d\n", ifname.c_str(), frame_num);
 			if ( frame_num < (ring->rx_rd_num + ring->tx_rd_num -1)) {
 				++frame_num;
 			}
 			else {
 				frame_num = ring->rx_rd_num;
 			}
-		//	click_chatter("[%s] [Tx thread] Next FD %d\n", ifname.c_str(), frame_num);
-		//	click_chatter("[%s] [Tx thread] DONE\n", ifname.c_str());
-
-			if ( current == NULL ) {
-				empty = true;
-				break;
-			}
 		}
-
-		// Transmit the whole batch
-		int ret = sendto(sock, NULL, 0, 0, NULL, 0);
-		if ( ret < 0 ) {
-			click_chatter("[Walk Tx] Failed to transmit the contents of the ring buffer", ifname.c_str());
-			return -1;
-		}
-
-		info->update_tx_info(sent_pkts, sent_bytes);
-
-		// Poll for more
-		poll(&ring->tx_pfd, 1, 1);
 	}
+
+	// Transmit the contents of the Tx ring buffer
+	int ret = sendto(ring->sock_fd, NULL, 0, 0, NULL, 0);
+	if ( ret < 0 ) {
+		click_chatter("[%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer", ifname.c_str());
+		return -1;
+	}
+	info->update_tx_info(sent_pkts, sent_bytes);
 
 	ring->tx_rd_idx = frame_num;
 
-//	click_chatter("[%s] [Walk Tx] Batch of %d packets (%u bytes) sent\n", ifname.c_str(), sent_pkts, sent_bytes);
+	//click_chatter("[%s] [Walk Tx] Sent %d packets (%u bytes)",
+	//	ifname.c_str(), sent_pkts, sent_bytes);
 
 	return sent_pkts;
 }
 #endif
-*/
 
 Packet *
 MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 {
-	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [Walk Rx Ring] Failed to find memory region for this device", ifname.c_str());
-		return NULL;
-	}
-
 	union frame_map ppd;
 	unsigned int frame_num = ring->rx_rd_idx;
 
-	//click_chatter("[%s] [Rx thread] Ring %p\n", ifname.c_str(), ring);
-
 	DevInfo *info = _devs.findp(ifname);
-	if ( !info ) {
-		click_chatter("[%s] [Walk Rx Ring] Device not accessible\n", ifname.c_str());
-		return NULL;
-	}
 
-	counter_t recv_pkts  = 0;
-	counter_t recv_bytes = 0;
+	counter_t recv_pkts = 0, recv_bytes = 0;
+	WritablePacket *p   = NULL;
 
-	poll(&ring->rx_pfd, 1, 1);
-
-	WritablePacket *p = NULL;
+	// Ask for packets
+	poll(&ring->rx_pfd, 1, 0);
 
 	while ( rx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) ) {
 		ppd.raw = ring->rd[frame_num].iov_base;
 
-		uint8_t *frame = NULL;
+		uint8_t *frame        = NULL;
 		unsigned int snap_len = 0;
 		const struct sockaddr_ll *sll;
 
@@ -659,13 +654,91 @@ MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 		}
 	
 		p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
-		p->timestamp_anno().set_timeval_ioctl(ring->sock_fd, SIOCGSTAMP);
+		p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
+		p->set_mac_header(p->data());
+
+		//print_frame(p->data(), snap_len);
+		
+		rx_user_ready(ppd.raw, ring->version);
+
+		recv_pkts++;
+		recv_bytes += snap_len;
+		frame_num   = (frame_num + 1) % ring->rx_rd_num;
+
+		// We want only one packet
+		break;
+	}
+
+	info->update_rx_info(recv_pkts, recv_bytes);
+
+	// Update the index of the Rx ring buffer
+	ring->rx_rd_idx = frame_num;
+
+	//click_chatter("[%s] [Walk Rx Ring] Received %d packets (%u bytes)",
+	//				ifname.c_str(), recv_pkts, recv_bytes);
+
+	return p;
+}
+
+#if HAVE_BATCH
+PacketBatch *
+MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
+{
+	union frame_map ppd;
+	unsigned int    frame_num = ring->rx_rd_idx;
+
+	PacketBatch    *head = NULL;
+	WritablePacket *last = NULL;
+
+	DevInfo *info = _devs.findp(ifname);
+
+	uint8_t *frame = NULL;
+	unsigned int snap_len;
+	const struct sockaddr_ll *sll;
+	counter_t recv_pkts = 0, recv_bytes = 0;
+
+	// Ask for packets
+	poll(&ring->rx_pfd, 1, 0);
+
+	while (
+		rx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) &&
+		(recv_pkts < info->get_burst_size())
+	) {
+		ppd.raw = ring->rd[frame_num].iov_base;
+
+		switch (ring->version) {
+			case TPACKET_V1:
+				snap_len = ppd.v1->tp_h.tp_snaplen;
+				frame    = (uint8_t *) ppd.raw + ppd.v1->tp_h.tp_mac;
+				sll      = (const struct sockaddr_ll *) (
+					ring->rd[frame_num].iov_base + TPACKET_ALIGN(sizeof(struct tpacket_hdr))
+				);
+				break;
+
+			case TPACKET_V2:
+				snap_len = ppd.v2->tp_h.tp_snaplen;
+				frame    = (uint8_t *) ppd.raw + ppd.v2->tp_h.tp_mac;
+				sll      = (const struct sockaddr_ll *) (
+					ring->rd[frame_num].iov_base + TPACKET_ALIGN(sizeof(struct tpacket2_hdr))
+				);
+				break;
+
+			default:
+				return NULL;
+		}
+	
+		WritablePacket *p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
 		p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
 		p->set_mac_header(p->data());
 		
+		// Aggregate input packets in a batch list
+		if ( !head )
+			head = PacketBatch::start_head(p);
+		else
+			last->set_next(p);
+		last = p;
+
 		//print_frame(p->data(), snap_len);
-		//click_chatter("Click packet: %d bytes, hdr len %d bytes with snaplen %d",
-		//				p->length(), p->ip_header_length(), snap_len);
 
 		rx_user_ready(ppd.raw, ring->version);
 
@@ -679,123 +752,27 @@ MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 	// Update the index of the Rx ring buffer
 	ring->rx_rd_idx = frame_num;
 
-	//click_chatter("[%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
-	//				ifname.c_str(), recv_pkts, recv_bytes, frame_num);
-
-	return p;
-}
-
-/*
-#if HAVE_BATCH
-PacketBatch *
-MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
-{
-	if ( (ring == NULL) || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [Walk Rx Ring] Failed to find memory region for this device", ifname.c_str());
-		return NULL;
-	}
-
-	union frame_map ppd;
-	unsigned int frame_num = ring->rx_rd_idx;
-
-	PacketBatch    *head = NULL;
-	WritablePacket *last = NULL;
-
-	//click_chatter("[%s] [Rx thread] Ring %p\n", ifname.c_str(), ring);
-
-	DevInfo *info = _devs.findp(ifname);
-	if ( !info ) {
-		click_chatter("[%s] [Walk Rx Ring] Device not accessible\n", ifname.c_str());
-		return NULL;
-	}
-
-	counter_t recv_pkts  = 0;
-	counter_t recv_bytes = 0;
-	const unsigned short burst_size = info->get_burst_size();
-//	click_chatter("[%s] [Rx thread] BURST %d\n", ifname.c_str(), burst_size);
-
-	while ( recv_pkts < burst_size ) {
-
-		poll(&ring->rx_pfd, 1, 0);
-
-		while (
-			rx_kernel_ready(ring->rd[frame_num].iov_base, ring->version) &&
-			(recv_pkts < burst_size)
-		) {
-			ppd.raw = ring->rd[frame_num].iov_base;
-
-			uint8_t *frame = NULL;
-			unsigned int snap_len = 0;
-			const struct sockaddr_ll *sll;
-
-			switch (ring->version) {
-				case TPACKET_V1:
-					snap_len = ppd.v1->tp_h.tp_snaplen;
-					frame    = (uint8_t *) ppd.raw + ppd.v1->tp_h.tp_mac;
-					sll      = (const struct sockaddr_ll *) (
-						ring->rd[frame_num].iov_base + TPACKET_ALIGN(sizeof(struct tpacket_hdr))
-					);
-					break;
-
-				case TPACKET_V2:
-					snap_len = ppd.v2->tp_h.tp_snaplen;
-					frame    = (uint8_t *) ppd.raw + ppd.v2->tp_h.tp_mac;
-					sll      = (const struct sockaddr_ll *) (
-						ring->rd[frame_num].iov_base + TPACKET_ALIGN(sizeof(struct tpacket2_hdr))
-					);
-					break;
-				default:
-					return NULL;
-			}
-		
-			WritablePacket *p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
-		//	p->timestamp_anno().set_timeval_ioctl(ring->sock_fd, SIOCGSTAMP);
-			p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
-			p->set_mac_header(p->data());
-			
-			// Aggregate input packets in a batch list
-			if (head == NULL)
-				head = PacketBatch::start_head(p);
-			else
-				last->set_next(p);
-			last = p;
-
-			//print_frame(p->data(), snap_len);
-			rx_user_ready(ppd.raw, ring->version);
-
-			recv_pkts++;
-			recv_bytes += snap_len;
-			frame_num   = (frame_num + 1) % ring->rx_rd_num;
-		}
-
-		info->update_rx_info(recv_pkts, recv_bytes);
-
-	//	poll(&ring->rx_pfd, 1, 1);
-	}
-
-	// Update the index of the Rx ring buffer
-	ring->rx_rd_idx = frame_num;
-
-	//click_chatter("[%s] [Walk Rx Ring] %d packets (%u bytes) received: Current RD: %d\n",
-	//				ifname.c_str(), recv_pkts, recv_bytes, frame_num);
+	/*
+	click_chatter("[%s] [Walk Rx Ring] Received %d packets (%u bytes)",
+				ifname.c_str(), recv_pkts, recv_bytes);
+	*/
 
 	// Assimilate batch and return it back to the element
-	if ( head ) {
-		head->make_tail(last, recv_pkts);
+	if ( !head ) {
+		return NULL;
 	}
+	head->make_tail(last, recv_pkts);
 
 	return head;
 }
 #endif
-*/
 
 void
 MMapDevice::configure_ring(struct ring *ring, unsigned int blocks)
 {
-	// Two orders of magnitude larger block than the OS page size (usually 4096)
 	ring->rx_req.tp_block_size = MMapDevice::BLOCK_SIZE;
 	ring->rx_req.tp_frame_size = next_power_of_two(MMapDevice::MTU_SIZE + 128);
-	ring->rx_req.tp_block_nr = blocks;
+	ring->rx_req.tp_block_nr   = blocks;
 	
 	// We reserve a number of frames for Tx and Rx
 	ring->rx_req.tp_frame_nr = 
@@ -818,7 +795,8 @@ MMapDevice::configure_ring(struct ring *ring, unsigned int blocks)
 	// The length of the frames we can handle. A power of two that aligns with TP.
 	ring->flen = ring->rx_req.tp_frame_size;
 
-	debug_mmap_layout(&ring->rx_req, &ring->tx_req);
+	if ( _verbose && _debug )
+		debug_mmap_layout(&ring->rx_req, &ring->tx_req);
 }
 
 int
@@ -827,7 +805,7 @@ MMapDevice::set_packet_loss_discard(int sock_fd)
 	int ret, discard = 1;
 
 	ret = setsockopt(sock_fd, SOL_PACKET, PACKET_LOSS, (void *) &discard, sizeof(discard));
-	if (ret == -1) {
+	if ( ret == -1 ) {
 		click_chatter("[Set Pkt Loss Discard] Failed to set socket options");
 		return -1;
 	}
@@ -960,13 +938,13 @@ MMapDevice::test_kernel_bit_width(void)
 
 	fd = open("/proc/kallsyms", O_RDONLY);
 	if (fd == -1) {
-		perror("open");
+		click_chatter("[Test Kernel Conf] Failed to access /proc");
 		exit(1);
 	}
 
 	ret = read(fd, in, sizeof(in));
 	if (ret <= 0) {
-		perror("read");
+		click_chatter("[Test Kernel Conf] Failed to access /proc");
 		exit(1);
 	}
 	close(fd);
@@ -992,7 +970,7 @@ MMapDevice::print_frame(void *frame, size_t len)
 	struct ethhdr *eth = (struct ethhdr *)frame;
 
 	if ( len < sizeof(struct ethhdr) ) {
-		click_chatter("[Test Payload] Frame too small: %zu bytes!\n", len);
+		click_chatter("[Test Payload] Frame too small: %zu bytes!", len);
 		return;
 	}
 
@@ -1020,43 +998,47 @@ MMapDevice::print_frame(void *frame, size_t len)
 
 	if ( ip->protocol == IPPROTO_UDP ) {
 		struct udphdr *udp = (struct udphdr *)((char *) ip + sizeof(struct iphdr));
-		click_chatter("%s.%d > %s.%d, UDP\n", sbuff, ntohs(udp->source), dbuff, ntohs(udp->dest));
+		click_chatter("%s.%d > %s.%d, UDP", sbuff, ntohs(udp->source), dbuff, ntohs(udp->dest));
 	}
 	else if ( ip->protocol == IPPROTO_TCP ) {
 		struct tcphdr *tcp = (struct tcphdr *)((char *) ip + sizeof(struct iphdr));
-		click_chatter("%s.%d > %s.%d, TCP\n", sbuff, ntohs(tcp->source), dbuff, ntohs(tcp->dest));
+		click_chatter("%s.%d > %s.%d, TCP", sbuff, ntohs(tcp->source), dbuff, ntohs(tcp->dest));
 	}
 	else {
-		click_chatter("%s > %s, IP\n", sbuff, dbuff);
+		click_chatter("%s > %s, IP", sbuff, dbuff);
 	}
 }
 
 void
 MMapDevice::debug_tpacket_frame(const void *base)
 {
-	click_chatter("Buffer base addr %p", base);
+	if ( !base )
+		if ( _verbose )
+			click_chatter("[TPACKET Info] Unable to display information");
+
+	click_chatter("[TPACKET Info] Buffer base addr %p", base);
 
 	const struct tpacket2_hdr *header = (const struct tpacket2_hdr *)base;
-	click_chatter("--> tpacket2_header");
-	click_chatter(" tp_status   : 0x%02x", header->tp_status);
-	click_chatter(" tp_len      : %d", header->tp_len);
-	click_chatter(" tp_snaplen  : %d", header->tp_snaplen);
-	click_chatter(" tp_mac      : %d", header->tp_mac);
-	click_chatter(" tp_net      : %d", header->tp_net);
-	click_chatter(" tp_sec      : %d", header->tp_sec);
-	click_chatter(" tp_nsec     : %d", header->tp_nsec);
-	click_chatter(" tp_vlan_tci : 0x%04x", header->tp_vlan_tci);
+	click_chatter("[TPACKET Info] tpacket2_header: ");
+	click_chatter("\ttp_status   : 0x%02x", header->tp_status);
+	click_chatter("\ttp_len      : %d", header->tp_len);
+	click_chatter("\ttp_snaplen  : %d", header->tp_snaplen);
+	click_chatter("\ttp_mac      : %d", header->tp_mac);
+	click_chatter("\ttp_net      : %d", header->tp_net);
+	click_chatter("\ttp_sec      : %d", header->tp_sec);
+	click_chatter("\ttp_nsec     : %d", header->tp_nsec);
+	click_chatter("\ttp_vlan_tci : 0x%04x", header->tp_vlan_tci);
 
 	const struct sockaddr_ll *sll = 
 		(const struct sockaddr_ll *) (base + TPACKET_ALIGN(sizeof(struct tpacket2_hdr)));
-	click_chatter("--> sockaddr_ll");
-	click_chatter(" sll_family   : 0x%02x", sll->sll_family);
-	click_chatter(" sll_protocol : 0x%04x", sll->sll_protocol);
-	click_chatter(" sll_ifindex  : %d", sll->sll_ifindex);
-	click_chatter(" sll_hatype   : %d", sll->sll_hatype);
-	click_chatter(" sll_pkttype  : %d", sll->sll_pkttype);
-	click_chatter(" sll_halen    : %d", sll->sll_halen);
-	click_chatter(" sll_addr[8]  : %02x:%02x:%02x:%02x:%02x:%02x",
+	click_chatter("[TPACKET Info] sockaddr_ll: ");
+	click_chatter("\t\tsll_family   : 0x%02x", sll->sll_family);
+	click_chatter("\t\tsll_protocol : 0x%04x", sll->sll_protocol);
+	click_chatter("\t\tsll_ifindex  : %d", sll->sll_ifindex);
+	click_chatter("\t\tsll_hatype   : %d", sll->sll_hatype);
+	click_chatter("\t\tsll_pkttype  : %d", sll->sll_pkttype);
+	click_chatter("\t\tsll_halen    : %d", sll->sll_halen);
+	click_chatter("\t\tsll_addr[8]  : %02x:%02x:%02x:%02x:%02x:%02x",
 		sll->sll_addr[0], sll->sll_addr[1], sll->sll_addr[2],
 		sll->sll_addr[3], sll->sll_addr[4], sll->sll_addr[5]
 	);
@@ -1067,19 +1049,23 @@ MMapDevice::debug_mmap_layout(
 		const struct tpacket_req *rx_packet_req,
 		const struct tpacket_req *tx_packet_req
 ){
-	click_chatter("TPACKET_ALIGNMENT = %d\n", TPACKET_ALIGNMENT);
-	click_chatter("TPACKET2_HDRLEN   = %d\n", TPACKET2_HDRLEN);
-	click_chatter("Sizeof(struct sockaddr_ll) = %d\n", sizeof(struct sockaddr_ll));
-	click_chatter("Rx packet req :\n");
-	click_chatter("\ttp_block_size = %d\n", rx_packet_req->tp_block_size);
-	click_chatter("\ttp_block_nr   = %d\n", rx_packet_req->tp_block_nr);
-	click_chatter("\ttp_frame_size = %d\n", rx_packet_req->tp_frame_size);
-	click_chatter("\ttp_frame_nr   = %d\n", rx_packet_req->tp_frame_nr);
-	click_chatter("Tx packet req :\n");
-	click_chatter("\ttp_block_size = %d\n", tx_packet_req->tp_block_size);
-	click_chatter("\ttp_block_nr   = %d\n", tx_packet_req->tp_block_nr);
-	click_chatter("\ttp_frame_size = %d\n", tx_packet_req->tp_frame_size);
-	click_chatter("\ttp_frame_nr   = %d\n", tx_packet_req->tp_frame_nr);
+	if ( !rx_packet_req || !tx_packet_req )
+		if ( _verbose )
+			click_chatter("[MMap Layout] Unable to display information");
+
+	click_chatter("[MMap Layout] TPACKET_ALIGNMENT = %d", TPACKET_ALIGNMENT);
+	click_chatter("[MMap Layout] TPACKET2_HDRLEN   = %d", TPACKET2_HDRLEN);
+	click_chatter("[MMap Layout] Sizeof(struct sockaddr_ll) = %d", sizeof(struct sockaddr_ll));
+	click_chatter("[MMap Layout] Rx packet req:");
+	click_chatter("\t\ttp_block_size = %d", rx_packet_req->tp_block_size);
+	click_chatter("\t\ttp_block_nr   = %d", rx_packet_req->tp_block_nr);
+	click_chatter("\t\ttp_frame_size = %d", rx_packet_req->tp_frame_size);
+	click_chatter("\t\ttp_frame_nr   = %d", rx_packet_req->tp_frame_nr);
+	click_chatter("[MMap Layout] Tx packet req:");
+	click_chatter("\t\ttp_block_size = %d", tx_packet_req->tp_block_size);
+	click_chatter("\t\ttp_block_nr   = %d", tx_packet_req->tp_block_nr);
+	click_chatter("\t\ttp_frame_size = %d", tx_packet_req->tp_frame_size);
+	click_chatter("\t\ttp_frame_nr   = %d", tx_packet_req->tp_frame_nr);
 }
 
 /*
