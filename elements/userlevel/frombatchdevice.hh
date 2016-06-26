@@ -103,10 +103,6 @@ FromBatchDevice sets packets' extra length annotations as appropriate.
 
 Returns the number of packets read by the device.
 
-=h reset_counts write-only
-
-Resets "count" to zero.
-
 =h kernel_drops read-only
 
 Returns the number of packets dropped by the kernel, probably due to memory
@@ -114,10 +110,17 @@ constraints, before FromBatchDevice could get them. This may be an integer; the
 notation C<"<I<d>">, meaning at most C<I<d>> drops; or C<"??">, meaning the
 number of drops is not known.
 
-=h encap read-only
+=h avg_rx_bs read-only
 
-Returns a string indicating the encapsulation type on this link. Can be
-`C<IP>', `C<ETHER>', or `C<FDDI>', for example.
+Returns the average number of packets received at once (batch-style).
+
+=h avg_proc_bs read-only
+
+Returns the average number of packets pushed to the next element at once (batch-style).
+
+=h reset_counts write-only
+
+Resets "count", "avg_proc_bs", "avg_rx_bs" to zero.
 
 =a ToBatchDevice.u */
 
@@ -126,6 +129,10 @@ Returns a string indicating the encapsulation type on this link. Can be
 #else
 	typedef uint32_t counter_t;
 #endif
+
+const short BATCHDEV_MIN_PREF_BATCH_SIZE = 8;
+const short BATCHDEV_DEF_PREF_BATCH_SIZE = 28;
+const short BATCHDEV_MAX_PREF_BATCH_SIZE = 32;
 
 class FromBatchDevice : public BatchElement {
 	public:
@@ -148,7 +155,7 @@ class FromBatchDevice : public BatchElement {
 		inline String ifname() const	{ return _ifname; }
 		inline int        fd() const	{ return _fd; }
 
-		void       selected(int fd, int mask);
+		void       selected (int fd, int mask);
 
 		static int open_packet_socket(String, ErrorHandler *);
 		static int set_promiscuous   (int, String, bool);
@@ -173,6 +180,21 @@ class FromBatchDevice : public BatchElement {
 		unsigned  _headroom;
 
 		counter_t _n_recv;
+		counter_t _recv_calls;
+		counter_t _push_calls;
+
+	#if HAVE_BATCH
+		// Calculate some statistics when in batch mode
+		int _inc_batch_size;
+
+		// Data structures necessary to batch the Rx syscalls
+		// We pre-allocate an array of Click packets that point
+		// to I/O vector data structures, filled by the NIC with
+		// a single syscall.
+		WritablePacket **_pkts;
+		struct mmsghdr  *_msgs;
+		struct iovec    *_iovecs;
+	#endif
 
 		static String read_handler (Element*, void*) CLICK_COLD;
 		static int    write_handler(

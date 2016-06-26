@@ -3,7 +3,7 @@
  * Douglas S. J. De Couto, Eddie Kohler, John Jannotti
  *
  * Transformed into a full push element with an internal queue that supports
- * both normal and batch push.
+ * both normal and batch push operations as well as bathcing of system calls.
  * by Georgios Katsikas
  *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
@@ -35,8 +35,14 @@ ToBatchDevice::ToBatchDevice()
 	: 	_task(this), _n_sent(0), _n_dropped(0),
 		_fd(-1), _my_fd(false),	_timeout(0), _blocking(false),
 		_congestion_warning_printed(false), 
-		_internal_tx_queue_size(-1), _from_dev_core(0)
+		_internal_tx_queue_size(-1)
 {
+#if HAVE_BATCH
+	_msgs           = 0;
+	_iovecs         = 0;
+	_inc_batch_size = 0;
+#endif
+	_send_calls     = 0;
 }
 
 ToBatchDevice::~ToBatchDevice()
@@ -47,14 +53,14 @@ int
 ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 {
 	String method;
-	_burst_size = 1;
+	_burst_size = BATCHDEV_DEF_PREF_BATCH_SIZE;
 
 	if (Args(conf, this, errh)
-			.read_mp("DEVNAME", _ifname)
-			.read("BURST",      _burst_size)
-			.read("IQUEUE",     _internal_tx_queue_size)
-			.read("BLOCKING",   _blocking)
-			.read("TIMEOUT",    _timeout)
+			.read_mp("DEVNAME",  _ifname)
+			.read   ("BURST",    _burst_size)
+			.read   ("IQUEUE",   _internal_tx_queue_size)
+			.read   ("BLOCKING", _blocking)
+			.read   ("TIMEOUT",  _timeout)
 			.complete() < 0)
 		return -1;
 
@@ -62,17 +68,22 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 		return errh->error("[%s] Interface not set", name().c_str());
 
 	if ( _burst_size <= 0 )
-		return errh->error("[%s] Bad BURST", name().c_str());
+		return errh->error("[%s] [%s] Bad BURST", name().c_str(), _ifname.c_str());
 
 	if ( _internal_tx_queue_size == 0 ) {
 		_internal_tx_queue_size = 1024;
-		errh->warning("[%s] Non-positive IQUEUE size. Setting default (%d) \n",
-					name().c_str(), _internal_tx_queue_size);
+		errh->warning("[%s] [%s] Non-positive IQUEUE size. Setting default (%d)",
+					name().c_str(), _ifname.c_str(), _internal_tx_queue_size);
 	}
 
 #if HAVE_BATCH
-	if ( batch_mode() == BATCH_MODE_YES )
-		errh->warning("[%s] BURST is unused with batching!", name().c_str());
+	click_chatter("[%s] [%s] Tx will batch up to BURST (%d) packets ",
+			name().c_str(), _ifname.c_str(), _burst_size);
+
+	if ( (_burst_size < BATCHDEV_MIN_PREF_BATCH_SIZE) || (_burst_size > BATCHDEV_MAX_PREF_BATCH_SIZE) )
+		errh->warning("[%s] [%s] To improve the I/O performance set a BURST value in [%d-%d], preferably %d.",
+				name().c_str(), _ifname.c_str(), BATCHDEV_MIN_PREF_BATCH_SIZE, BATCHDEV_MAX_PREF_BATCH_SIZE,
+				BATCHDEV_DEF_PREF_BATCH_SIZE);
 #endif
 
 	return 0;
@@ -107,8 +118,6 @@ ToBatchDevice::find_fromdevice_core() const
 int
 ToBatchDevice::initialize(ErrorHandler *errh)
 {
-	//_timer.initialize(this);
-
 	FromBatchDevice *fd = find_fromdevice();
 
 	if (fd && fd->fd() >= 0)
@@ -135,13 +144,29 @@ ToBatchDevice::initialize(ErrorHandler *errh)
 		_iqueue.timeout.move_thread(click_current_cpu_id());
 	}
 
+#if HAVE_BATCH
+	// Pre-allocate memory for '_burst_size' packets
+	_msgs = (struct mmsghdr *)  malloc(_burst_size * sizeof(struct mmsghdr));
+	if ( !_msgs )
+		return errh->error("[%s] [%s] Cannot pre-allocate message buffers",
+			name().c_str(), _ifname.c_str());
+	memset(_msgs, 0, _burst_size * sizeof(struct mmsghdr));
+
+	// Pre-allocate memory for '_burst_size' packets
+	_iovecs = (struct iovec *)  malloc(_burst_size * sizeof(struct iovec));
+	if ( !_iovecs )
+		return errh->error("[%s] [%s] Cannot pre-allocate ring buffers",
+			name().c_str(), _ifname.c_str());
+	memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
+
+	memset((struct msghdr *)&_batch_header, 0, sizeof(_batch_header));
+	_batch_header.msg_name       = NULL;
+	_batch_header.msg_namelen    = 0;
+	_batch_header.msg_control    = NULL;
+	_batch_header.msg_controllen = 0;
+#endif
+
 	ScheduleInfo::initialize_task(this, &_task, false, errh);
-
-//	ScheduleInfo::join_scheduler(this, &_task, errh);
-//	_signal = Notifier::upstream_empty_signal(this, 0, &_task);
-
-//	click_chatter("  ToBatchDevice[%s] has CPU ID %d", _ifname.c_str(), router()->home_thread_id(this));
-//	click_chatter("FromBatchDevice[%s] has CPU ID %d", _ifname.c_str(), find_fromdevice_core());
 
 	return 0;
 }
@@ -155,6 +180,13 @@ ToBatchDevice::cleanup(CleanupStage)
 
 	if ( _iqueue.pkts )
 		delete[] _iqueue.pkts;
+
+#if HAVE_BATCH
+	if ( _msgs )
+		free(_msgs);
+	if ( _iovecs )
+		free(_iovecs);
+#endif
 }
 
 int
@@ -163,10 +195,9 @@ ToBatchDevice::send_packet(Packet *p)
 	if ( !p || p->length() == 0 )
 		return -EINVAL;
 
-	int r = 0;
 	errno = 0;
 
-	r = send(_fd, p->data(), p->length(), 0);
+	int r = send(_fd, p->data(), p->length(), 0);
 
 	if (r >= 0)
 		return 0;
@@ -194,7 +225,9 @@ ToBatchDevice::set_flush_timer(TXInternalQueue &iqueue)
 	}
 }
 
-/* Flush as many packets as possible from the internal queue of the DPDK ring. */
+/*
+ * Flush as many packets as possible from the internal queue of the DPDK ring
+ */
 void
 ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 {
@@ -205,6 +238,7 @@ ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 			break;
 
 		++sent;
+		++_send_calls;
 
 		iqueue.nr_pending --;
 		iqueue.index      ++;
@@ -222,11 +256,59 @@ ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 		iqueue.index = 0;
 }
 
+#if HAVE_BATCH
+void
+ToBatchDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
+{
+	unsigned pkts_in_batch = 0;
+
+	do {
+		// Add this packet to the vector ring
+		_iovecs[pkts_in_batch].iov_base           = (void *) iqueue.pkts[iqueue.index]->data();
+		_iovecs[pkts_in_batch].iov_len            = iqueue.pkts[iqueue.index]->length();
+		_msgs  [pkts_in_batch].msg_hdr.msg_iov    = &_iovecs[pkts_in_batch];
+		_msgs  [pkts_in_batch].msg_hdr.msg_iovlen = 1;
+
+		++pkts_in_batch;
+
+		iqueue.nr_pending --;
+		iqueue.index      ++;
+
+		// Wrapping around the ring
+		if (iqueue.index >= _internal_tx_queue_size)
+			iqueue.index = 0;
+
+	} while ( (iqueue.nr_pending > 0) && (pkts_in_batch < _burst_size) );
+
+	// Transmit the batch
+	int sent = sendmmsg(_fd, _msgs, pkts_in_batch, 0);
+
+	// Problem occured
+	if ( sent == -1 ) {
+		//click_chatter("[%s] [%s] Failed to emit batch with %d packets",
+		//	name().c_str(), _ifname.c_str(), pkts_in_batch);
+		return;
+	}
+
+	//click_chatter("[%s] [%s] Sent: %2d packets", name().c_str(), _ifname.c_str(), sent);
+
+	++_send_calls;
+	_n_sent         += sent;
+	_inc_batch_size += sent;
+
+	// If ring is empty, reset the index to avoid wrap ups
+	if ( iqueue.nr_pending == 0 )
+		iqueue.index = 0;
+
+	// Clean the memory for the next batch
+	memset(_msgs,   0, _burst_size * sizeof(struct mmsghdr));
+	memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
+}
+#endif
+
 void
 ToBatchDevice::push_packet(int, Packet *p)
 {
-//	click_chatter("ToBatchDevice[%s] from CPU: %d",	_ifname.c_str(), router()->home_thread_id(this));
-
 	if ( !p )
 		return;
 
@@ -248,12 +330,12 @@ ToBatchDevice::push_packet(int, Packet *p)
 				++_n_dropped;
 
 				if ( !_congestion_warning_printed )
-					click_chatter("[%s] Packet dropped", name().c_str());
+					click_chatter("[%s] [%s] Packet dropped", name().c_str(), _ifname.c_str());
 				_congestion_warning_printed = true;
 			}
 			else {
 				if ( !_congestion_warning_printed )
-					click_chatter("[%s] Congestion warning", name().c_str());
+					click_chatter("[%s] [%s] Congestion warning", name().c_str(), _ifname.c_str());
 				_congestion_warning_printed = true;
 			}
 		}
@@ -301,7 +383,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 		// First, place the packets in the queue, while there is still place there
 		while ( iqueue.nr_pending < _internal_tx_queue_size && p ) {
 
-			if ( p != NULL ) {
+			if ( p ) {
 				iqueue.pkts[(iqueue.index + iqueue.nr_pending) % _internal_tx_queue_size] = p;
 				iqueue.nr_pending++;
 			}
@@ -326,7 +408,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 
 		// Flush the queue if we have pending packets
 		if ( ((int) iqueue.nr_pending > 0) || congestioned ) {
-			flush_internal_tx_queue(iqueue);
+			flush_internal_tx_queue_batch(iqueue);
 		}
 		set_flush_timer(iqueue);
 
@@ -350,17 +432,28 @@ ToBatchDevice::read_handler(Element *e, void *thunk)
 {
 	ToBatchDevice *td = static_cast<ToBatchDevice*>(e);
 
-	if ( thunk == (void *) 0 )
-		return String(td->_n_sent);
-	else
-		return String(td->_n_dropped);
+	switch((uintptr_t) thunk) {
+		case h_sent:
+			return String(td->_n_sent);
+		case h_dropped:
+			return String((bool) td->_n_dropped);
+		case h_avg_tx_bs:
+		#if HAVE_BATCH
+			return String( (float)(td->_inc_batch_size) / (float)(td->_send_calls));
+		#else
+			return String( (float)(td->_n_sent) / (float)(td->_send_calls));
+		#endif
+		default:
+			break;
+	}
 }
 
 void
 ToBatchDevice::add_handlers()
 {
-	add_read_handler("n_sent",    read_handler, 0);
-	add_read_handler("n_dropped", read_handler, 1);
+	add_read_handler ("sent",        read_handler,  h_sent);
+	add_read_handler ("dropped",     read_handler,  h_dropped);
+	add_read_handler ("avg_tx_bs",   read_handler,  h_avg_tx_bs);
 }
 
 CLICK_ENDDECLS

@@ -3,7 +3,7 @@
  * frombatchdevice.{cc,hh} -- element reads packets from Linux-based interfaces
  * Douglas S. J. De Couto, Eddie Kohler, John Jannotti
  *
- * Computational batching support
+ * Computational and syscall batching support
  * by Georgios Katsikas
  *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
@@ -39,7 +39,6 @@
 #include <click/config.h>
 #include <click/error.hh>
 #include <click/args.hh>
-#include <click/standard/scheduleinfo.hh>
 
 #include "fakepcap.hh"
 #include "frombatchdevice.hh"
@@ -47,10 +46,16 @@
 CLICK_DECLS
 
 FromBatchDevice::FromBatchDevice()
-	: _datalink(-1), _n_recv(0), _promisc(0), _snaplen(0), _fd(-1)
+	: 	_datalink(-1), _n_recv(0), _recv_calls(0), _push_calls(0),
+		_promisc(0), _snaplen(0), _fd(-1)
 {
 #if HAVE_BATCH
-	in_batch_mode = BATCH_MODE_YES;
+	in_batch_mode   = BATCH_MODE_YES;
+	_inc_batch_size = 0;
+
+	_pkts   = 0;
+	_msgs   = 0;
+	_iovecs = 0;
 #endif
 }
 
@@ -67,34 +72,46 @@ FromBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 	_headroom   = Packet::default_headroom;
 	_headroom  += (4 - (_headroom + 2) % 4) % 4; // default 4/2 alignment
 	_force_ip   = false;
-	_burst_size = 1;
+	_burst_size = BATCHDEV_DEF_PREF_BATCH_SIZE;
 
 	if (Args(conf, this, errh)
-			.read_mp("DEVNAME",   _ifname)
-			.read_p("PROMISC",    promisc)
-			.read_p("SNAPLEN",    _snaplen)
-			.read("SNIFFER",      sniffer)
-			.read("FORCE_IP",     _force_ip)
-			.read("PROTOCOL",     _protocol)
-			.read("OUTBOUND",     outbound)
-			.read("HEADROOM",     _headroom)
-			.read("BURST",        _burst_size)
-			.read("TIMESTAMP",    timestamp)
+			.read_mp("DEVNAME",    _ifname)
+			.read_p("PROMISC",     promisc)
+			.read_p("SNAPLEN",     _snaplen)
+			.read("SNIFFER",       sniffer)
+			.read("FORCE_IP",      _force_ip)
+			.read("PROTOCOL",      _protocol)
+			.read("OUTBOUND",      outbound)
+			.read("HEADROOM",      _headroom)
+			.read("BURST",         _burst_size)
+			.read("TIMESTAMP",     timestamp)
 			.complete() < 0)
 		return -1;
 
 	if ( _snaplen > 65535 || _snaplen < 14 )
-		return errh->error("SNAPLEN out of range");
+		return errh->error("[%s] [%s] SNAPLEN out of range", name().c_str(), _ifname.c_str());
 	if ( _headroom > 8190 )
-		return errh->error("HEADROOM out of range");
+		return errh->error("[%s] [%s] HEADROOM out of range", name().c_str(), _ifname.c_str());
 	if ( _burst_size <= 0 )
-		return errh->error("BURST out of range");
+		return errh->error("[%s] [%s] BURST out of range", name().c_str(), _ifname.c_str());
 	_protocol = htons(_protocol);
 
 	_sniffer   = sniffer;
 	_promisc   = promisc;
 	_outbound  = outbound;
 	_timestamp = timestamp;
+
+#if HAVE_BATCH
+	if ( _force_ip )
+		return errh->error("[%s] [%s] FORCE_IP option not supported in batch mode",
+			name().c_str(), _ifname.c_str());
+
+
+	if ( (_burst_size < BATCHDEV_MIN_PREF_BATCH_SIZE) || (_burst_size > BATCHDEV_MAX_PREF_BATCH_SIZE) )
+		errh->warning("[%s] [%s] To improve the I/O performance set a BURST value in [%d-%d], preferably %d.",
+				name().c_str(), _ifname.c_str(), BATCHDEV_MIN_PREF_BATCH_SIZE, BATCHDEV_MAX_PREF_BATCH_SIZE,
+				BATCHDEV_DEF_PREF_BATCH_SIZE);
+#endif
 
 	return 0;
 }
@@ -128,7 +145,37 @@ FromBatchDevice::initialize(ErrorHandler *errh)
 		if (KernelFilter::device_filter(_ifname, true, errh) < 0)
 			_sniffer = true;
 
-//	click_chatter("FromBatchDevice[%s] has CPU ID %d", _ifname.c_str(), router()->home_thread_id(this));
+#if HAVE_BATCH
+	// Pre-allocate memory for '_burst_size' packets
+	_msgs = (struct mmsghdr *)  malloc(_burst_size * sizeof(struct mmsghdr));
+	if ( !_msgs )
+		return errh->error("[%s] [%s] Cannot pre-allocate message buffers",
+			name().c_str(), _ifname.c_str());
+	memset(_msgs, 0, _burst_size * sizeof(struct mmsghdr));
+
+	_iovecs = (struct iovec *)  malloc(_burst_size * sizeof(struct iovec));
+	if ( !_iovecs )
+		return errh->error("[%s] [%s] Cannot pre-allocate ring buffers",
+			name().c_str(), _ifname.c_str());
+	memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
+
+	_pkts = (WritablePacket **) malloc(_burst_size * sizeof(Packet *));
+	if ( !_pkts )
+		return errh->error("[%s] [%s] Cannot pre-allocate packet buffers",
+			name().c_str(), _ifname.c_str());
+	memset(_pkts, 0, _burst_size * sizeof(Packet *));
+
+	for (unsigned short i = 0; i < _burst_size; i++) {
+		// Allocate a large enough space for each packet
+		_pkts  [i] = Packet::make(_headroom, 0, _snaplen, 0);
+		// Point the I/O vectors to the buffer of Click packets
+		_iovecs[i].iov_base           = _pkts[i]->data();
+		_iovecs[i].iov_len            = _pkts[i]->length();
+		// Message structure understood by the recvmmsg syscall
+		_msgs  [i].msg_hdr.msg_iov    = &_iovecs[i];
+		_msgs  [i].msg_hdr.msg_iovlen = 1;
+	}
+#endif
 
 	return 0;
 }
@@ -146,6 +193,20 @@ FromBatchDevice::cleanup(CleanupStage stage)
 	}
 
 	_fd = -1;
+
+#if HAVE_BATCH
+	for (unsigned short i = 0; i < _burst_size; i++) {
+		if ( _pkts[i] )
+			_pkts[i]->kill();
+		_pkts[i] = NULL;
+	}
+	if ( _pkts )
+		free(_pkts);
+	if ( _msgs )
+		free(_msgs);
+	if ( _iovecs )
+		free(_iovecs);
+#endif
 }
 
 int
@@ -209,7 +270,7 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	if ( setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0 )
 		return -3;
 #else
-	if ( was_promisc != promisc ) {
+	if ( was_promisc != (int) promisc ) {
 		ifr.ifr_flags = (promisc ? ifr.ifr_flags | IFF_PROMISC : ifr.ifr_flags & ~IFF_PROMISC);
 		if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0)
 			return -3;
@@ -219,17 +280,92 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 	return was_promisc;
 }
 
+/*
+ * In batch mode and when METHOD is LINUX, reading packets from the socket
+ * is implemented in a different way such that the number of performed syscalls
+ * is greatly reduced to amortize their overhead.
+ */
+#if HAVE_BATCH
 void
 FromBatchDevice::selected(int, int)
 {
-//	click_chatter("FromBatchDevice[%s] from CPU: %d",
-//		_ifname.c_str(), router()->home_thread_id(this));
+	unsigned short i;
 
-#if HAVE_BATCH
 	PacketBatch    *head = NULL;
 	WritablePacket *last = NULL;
-#endif
 
+	// Ask for a batch of packets with a single syscall.
+	int pkts_no = recvmmsg(_fd, _msgs, _burst_size, 0, NULL);
+	//click_chatter("[%s] [%s] %d packets received", name().c_str(), _ifname.c_str(), pkts_no);
+
+	// Something went wrong. Release the memory and re-schedule
+	if ( pkts_no == -1 ) {
+		click_chatter("[%s] [%s] Error in recvfrom: %s",
+			name().c_str(), _ifname.c_str(), strerror(errno));
+		goto clean;
+	}
+
+	++_recv_calls;
+
+	// We have a batch of packets at hand
+	for (i = 0; i < pkts_no; i++) {
+		WritablePacket *p = _pkts[i];
+
+		// click_chatter("[%s] [%s] Packet with size %d",
+		//		name().c_str(), _ifname.c_str(), _msgs[i].msg_len);
+
+		if ( _msgs[i].msg_len > _snaplen ) {
+			assert(p->length() == (uint32_t)_snaplen);
+			SET_EXTRA_LENGTH_ANNO(p, _msgs[i].msg_len - _snaplen);
+		}
+		else {
+			p->take(_snaplen - _msgs[i].msg_len);
+		}
+
+		p->set_packet_type_anno(Packet::HOST);
+		p->set_mac_header(p->data());
+
+		// Build-up the batch packet-by-packet
+		if ( head == NULL )
+			head = PacketBatch::start_head(p);
+		else
+			last->set_next(p);
+		last = p;
+	}
+
+	// Assimilate the batch
+	if ( !head || (pkts_no <= 0) ) {
+		goto clean;
+	}
+	
+	head->make_tail  (last, pkts_no);
+	output_push_batch(0, head);
+
+	++_push_calls;
+	_n_recv         += pkts_no;
+	_inc_batch_size += pkts_no;
+
+	goto clean;
+
+	// Clean
+	clean:
+		// Reset the buffers and allocate space for the next batch
+		//memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
+		//memset(_msgs,   0, _burst_size * sizeof(struct mmsghdr));
+		for (i = 0; i < _burst_size; i++) {
+			_pkts  [i] = Packet::make(_headroom, 0, _snaplen, 0);
+			_iovecs[i].iov_base           = _pkts[i]->data();
+			_iovecs[i].iov_len            = _pkts[i]->length();
+			_msgs  [i].msg_hdr.msg_iov    = &_iovecs[i];
+			_msgs  [i].msg_hdr.msg_iovlen = 1;
+		}
+}
+
+#else  // #if HAVE_BATCH
+
+void
+FromBatchDevice::selected(int, int)
+{
 	int n = 0;
 
 	while ( n < _burst_size ) {
@@ -246,49 +382,37 @@ FromBatchDevice::selected(int, int)
 				assert(p->length() == (uint32_t)_snaplen);
 				SET_EXTRA_LENGTH_ANNO(p, len - _snaplen);
 			}
-			else
+			else {
 				p->take(_snaplen - len);
+			}
 
 			p->set_packet_type_anno((Packet::PacketType)sa.sll_pkttype);
 			p->timestamp_anno().set_timeval_ioctl(_fd, SIOCGSTAMP);
 			p->set_mac_header(p->data());
 
 			++n;
+			++_n_recv;
+			++_recv_calls;
 
 			// Ready to push
 			if ( !_force_ip || fake_pcap_force_ip(p, _datalink) ) {
-				// In batch-mode
-			#if HAVE_BATCH
-				if (head == NULL)
-					head = PacketBatch::start_head(p);
-				else
-					last->set_next(p);
-				last = p;
-				// Or regularly
-			#else
 				output(0).push(p);
-			#endif
 			}
 			else {
 				checked_output_push(1, p);
 			}
+			++_push_calls;
 		}
 		else {
-		//	click_chatter("FromBatchDevice(%s): Killed", _ifname.c_str());
 			p->kill();
 			if (len <= 0 && errno != EAGAIN)
 				click_chatter("FromBatchDevice(%s): recvfrom: %s", _ifname.c_str(), strerror(errno));
 			break;
 		}
 	}
-
-#if HAVE_BATCH
-	if ( head && (n > 0) ) {
-		head->make_tail  (last, n);
-		output_push_batch(0, head);
-	}
-#endif
 }
+
+#endif  // #if HAVE_BATCH
 
 void
 FromBatchDevice::kernel_drops(bool &known, int &max_drops) const
@@ -322,6 +446,14 @@ FromBatchDevice::read_handler(Element *e, void *thunk)
 	}
 	else if (thunk == (void *) 1)
 		return String(fd->_n_recv);
+	else if (thunk == (void *) 2)
+	#if HAVE_BATCH
+		return String( (float)(fd->_inc_batch_size) / (float)(fd->_recv_calls));
+	#else
+		return String( (float)(fd->_n_recv) / (float)(fd->_recv_calls));
+	#endif
+	else if (thunk == (void *) 3)
+		return String( (float)(fd->_n_recv) / (float)(fd->_push_calls));
 }
 
 int
@@ -335,8 +467,10 @@ FromBatchDevice::write_handler(const String &, Element *e, void *, ErrorHandler 
 void
 FromBatchDevice::add_handlers()
 {
-	add_read_handler ("kernel_drops", read_handler, 0);
-	add_read_handler ("count",        read_handler, 1);
+	add_read_handler ("kernel_drops", read_handler,  0);
+	add_read_handler ("count",        read_handler,  1);
+	add_read_handler ("avg_rx_bs",    read_handler,  2);
+	add_read_handler ("avg_proc_bs",  read_handler,  3);
 	add_write_handler("reset_counts", write_handler, 0, Handler::BUTTON);
 }
 

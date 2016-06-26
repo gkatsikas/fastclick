@@ -2,7 +2,6 @@
 #define CLICK_TOBATCHDEVICE_USERLEVEL_HH
 
 #include <click/string.hh>
-#include <click/notifier.hh>
 #include <click/batchelement.hh>
 
 #include "elements/userlevel/frombatchdevice.hh"
@@ -18,12 +17,13 @@ ToBatchDevice(DEVNAME [, I<keywords>])
 
 =s netdevices
 
-sends packets to a Linux-based network device (user-level) in batch mode
+sends packets to a Linux-based network device (user-level) in batch mode.
 
 =d
 
 This manual page describes the user-level ToBatchDevice element.
-Sends packets out the named device using a full-push model with an internal queue.
+Sends packets out the named device using a full-push model with an internal queue
+and batching of system calls.
 Keyword arguments are:
 
 =over 8
@@ -69,6 +69,10 @@ to 0 (immediate flush).
 
 This element is only available at user level.
 
+=e
+
+  FromBatchDevice(eth0) -> Print -> ToBatchDevice(eth0)
+
 =n
 
 Packets sent via ToBatchDevice should already have a link-level
@@ -81,6 +85,18 @@ device.
 
 No putput ports.
 
+=h sent read-only
+
+Returns the number of packets sent by the device.
+
+=h dropped read-only
+
+Returns the number of packets dropped by the internal queue (due to congestion).
+
+=h avg_tx_bs read-only
+
+Returns the average number of packets transmitted at once (batch-style).
+
 =a
 FromBatchDevice.u
 */
@@ -88,7 +104,7 @@ FromBatchDevice.u
 class ToBatchDevice : public BatchElement {
 	public:
 
-		ToBatchDevice()  CLICK_COLD;
+		ToBatchDevice () CLICK_COLD;
 		~ToBatchDevice() CLICK_COLD;
 
 		const char *class_name() const { return "ToBatchDevice"; }
@@ -96,8 +112,8 @@ class ToBatchDevice : public BatchElement {
 		const char *processing() const { return PUSH; }
 		int    configure_phase() const { return KernelFilter::CONFIGURE_PHASE_TODEVICE; }
 
-		int configure    (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
-		int initialize   (ErrorHandler *) 			CLICK_COLD;
+		int  configure   (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
+		int  initialize  (ErrorHandler *) 			CLICK_COLD;
 		void cleanup     (CleanupStage) 			CLICK_COLD;
 		void add_handlers() 					CLICK_COLD;
 
@@ -126,8 +142,11 @@ class ToBatchDevice : public BatchElement {
 				Timer timeout;
 		} __attribute__((aligned(64)));
 
-		inline void set_flush_timer (TXInternalQueue &iqueue);
-		void flush_internal_tx_queue(TXInternalQueue &iqueue);
+		inline void set_flush_timer       (TXInternalQueue &iqueue);
+		void flush_internal_tx_queue      (TXInternalQueue &iqueue);
+	#if HAVE_BATCH
+		void flush_internal_tx_queue_batch(TXInternalQueue &iqueue);
+	#endif
 
 		// Internal queue to store packets to be emitted
 		// No need to use a Queue element anymore
@@ -135,25 +154,37 @@ class ToBatchDevice : public BatchElement {
 		unsigned int    _internal_tx_queue_size;
 
 		Task            _task;
-		NotifierSignal  _signal;
 
 		String          _ifname;
 		int             _fd;
 		bool            _my_fd;
-		unsigned short  _from_dev_core;
 
 		counter_t       _n_sent;
 		counter_t       _n_dropped;
+		counter_t       _send_calls;
 
 		int             _burst_size;
 		short           _timeout;
 		bool            _blocking;
 		bool            _congestion_warning_printed;
 
+	#if HAVE_BATCH
+		// Calculate some statistics when in batch mode
+		int  _inc_batch_size;
+
+		// Data structures necessary to batch the Tx syscalls
+		// We an I/O vector data structure with a batch of Click
+		// packets and emit them all with a single syscall.
+		struct msghdr    _batch_header;
+		struct mmsghdr  *_msgs;
+		struct iovec    *_iovecs;
+	#endif
+
 		FromBatchDevice *find_fromdevice() const;
 		int find_fromdevice_core() const;
 		int send_packet(Packet *p);
 
+		enum { h_sent, h_dropped, h_avg_tx_bs };
 		static String read_handler(Element *e, void *thunk) CLICK_COLD;
 };
 
