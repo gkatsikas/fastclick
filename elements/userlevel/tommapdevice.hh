@@ -103,7 +103,7 @@ Returns the average number of packets transmitted at once (batch-style).
 FromMMapDevice */
 
 class ToMMapDevice : public BatchElement {
-	
+
 	public:
 		ToMMapDevice () CLICK_COLD;
 		~ToMMapDevice() CLICK_COLD;

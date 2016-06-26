@@ -31,11 +31,11 @@
 
 CLICK_DECLS
 
-ToBatchDevice::ToBatchDevice()
-	: 	_task(this), _n_sent(0), _n_dropped(0),
-		_fd(-1), _my_fd(false),	_timeout(0), _blocking(false),
-		_congestion_warning_printed(false), 
-		_internal_tx_queue_size(-1)
+ToBatchDevice::ToBatchDevice() :
+	_task(this), _n_sent(0), _n_dropped(0),
+	_fd(-1), _my_fd(false),	_timeout(0), _blocking(false),
+	_congestion_warning_printed(false),
+	_internal_tx_queue_size(-1)
 {
 #if HAVE_BATCH
 	_msgs           = 0;

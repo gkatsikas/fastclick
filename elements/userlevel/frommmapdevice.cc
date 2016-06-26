@@ -26,9 +26,9 @@
 
 CLICK_DECLS
 
-FromMMapDevice::FromMMapDevice()
-	:	_n_recv(0), _recv_calls(0), _push_calls(0),
-		_burst_size(32), _verbose(false), _debug(false)
+FromMMapDevice::FromMMapDevice() :
+	_n_recv(0), _recv_calls(0), _push_calls(0),
+	_burst_size(32), _verbose(false), _debug(false)
 {
 #if HAVE_BATCH
 	in_batch_mode   = BATCH_MODE_YES;

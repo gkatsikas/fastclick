@@ -242,18 +242,19 @@ class MMapDevice {
 			counter_t tx_total_packets;
 			counter_t rx_total_packets;
 
-			inline DevInfo() :	rx(false), tx(false), promisc(false),
-								burst_size(32),
-								tx_total_bytes(0), rx_total_bytes(0),
-								tx_total_packets(0), rx_total_packets(0),
-								tx_send_calls(0), rx_recv_calls(0) {};
+			inline DevInfo() :
+				rx(false), tx(false), promisc(false),
+				burst_size(32),
+				tx_total_bytes(0), rx_total_bytes(0),
+				tx_total_packets(0), rx_total_packets(0),
+				tx_send_calls(0), rx_recv_calls(0) {};
 
-			inline DevInfo(unsigned short burst) :	
-								rx(false), tx(false), promisc(false),
-								burst_size(burst),
-								tx_total_bytes(0), rx_total_bytes(0),
-								tx_total_packets(0), rx_total_packets(0),
-								tx_send_calls(0), rx_recv_calls(0) {};
+			inline DevInfo(unsigned short burst) :
+				rx(false), tx(false), promisc(false),
+				burst_size(burst),
+				tx_total_bytes(0), rx_total_bytes(0),
+				tx_total_packets(0), rx_total_packets(0),
+				tx_send_calls(0), rx_recv_calls(0) {};
 
 			inline unsigned short get_burst_size() { return burst_size; };
 

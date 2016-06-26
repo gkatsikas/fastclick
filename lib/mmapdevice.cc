@@ -376,7 +376,7 @@ MMapDevice::close_socket(const String ifname, struct ring *ring)
 		click_chatter("[%s] [Close Socket] Failed to find memory region for this device", ifname.c_str());
 		return -1;
 	}
-	
+
 	if( ring->sock_fd >= 0 ) {
 		close(ring->sock_fd);
 		ring->sock_fd = -1;
@@ -652,13 +652,13 @@ MMapDevice::walk_rx_ring_packet(const String ifname, struct ring *ring)
 			default:
 				return NULL;
 		}
-	
+
 		p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
 		p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
 		p->set_mac_header(p->data());
 
 		//print_frame(p->data(), snap_len);
-		
+
 		rx_user_ready(ppd.raw, ring->version);
 
 		recv_pkts++;
@@ -726,11 +726,11 @@ MMapDevice::walk_rx_ring_batch(const String ifname, struct ring *ring)
 			default:
 				return NULL;
 		}
-	
+
 		WritablePacket *p = Packet::make(Packet::default_headroom, frame, snap_len, 0);
 		p->set_packet_type_anno((Packet::PacketType)sll->sll_pkttype);
 		p->set_mac_header(p->data());
-		
+
 		// Aggregate input packets in a batch list
 		if ( !head )
 			head = PacketBatch::start_head(p);
@@ -773,9 +773,9 @@ MMapDevice::configure_ring(struct ring *ring, unsigned int blocks)
 	ring->rx_req.tp_block_size = MMapDevice::BLOCK_SIZE;
 	ring->rx_req.tp_frame_size = next_power_of_two(MMapDevice::MTU_SIZE + 128);
 	ring->rx_req.tp_block_nr   = blocks;
-	
+
 	// We reserve a number of frames for Tx and Rx
-	ring->rx_req.tp_frame_nr = 
+	ring->rx_req.tp_frame_nr =
 		(ring->rx_req.tp_block_size / ring->rx_req.tp_frame_size) * ring->rx_req.tp_block_nr;
 
 	// Tx configuration is symmetric with Rx
@@ -791,7 +791,7 @@ MMapDevice::configure_ring(struct ring *ring, unsigned int blocks)
 	ring->tx_rd_num  = ring->tx_req.tp_frame_nr;
 	// The total number of ring descriptors is equally divided between Tx and Rx.
 	ring->rd_num     = ring->rx_rd_num + ring->tx_rd_num;
-	
+
 	// The length of the frames we can handle. A power of two that aligns with TP.
 	ring->flen = ring->rx_req.tp_frame_size;
 
@@ -1029,7 +1029,7 @@ MMapDevice::debug_tpacket_frame(const void *base)
 	click_chatter("\ttp_nsec     : %d", header->tp_nsec);
 	click_chatter("\ttp_vlan_tci : 0x%04x", header->tp_vlan_tci);
 
-	const struct sockaddr_ll *sll = 
+	const struct sockaddr_ll *sll =
 		(const struct sockaddr_ll *) (base + TPACKET_ALIGN(sizeof(struct tpacket2_hdr)));
 	click_chatter("[TPACKET Info] sockaddr_ll: ");
 	click_chatter("\t\tsll_family   : 0x%02x", sll->sll_family);

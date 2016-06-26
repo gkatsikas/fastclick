@@ -27,11 +27,11 @@
 
 CLICK_DECLS
 
-ToMMapDevice::ToMMapDevice()
-	: _task(this), _n_sent(0), _n_dropped(0), _ring(0), 
-		_fd(-1), _timeout(0), _blocking(false),
-		_burst_size(32), _congestion_warning_printed(false), 
-		_internal_tx_queue_size(-1), _verbose(false), _debug(false)
+ToMMapDevice::ToMMapDevice() :
+	_task(this), _n_sent(0), _n_dropped(0), _ring(0),
+	_fd(-1), _timeout(0), _blocking(false),
+	_burst_size(32), _congestion_warning_printed(false),
+	_internal_tx_queue_size(-1), _verbose(false), _debug(false)
 {
 #if HAVE_BATCH
 	_inc_batch_size = 0;

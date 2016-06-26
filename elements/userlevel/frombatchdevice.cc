@@ -45,9 +45,9 @@
 
 CLICK_DECLS
 
-FromBatchDevice::FromBatchDevice()
-	: 	_datalink(-1), _n_recv(0), _recv_calls(0), _push_calls(0),
-		_promisc(0), _snaplen(0), _fd(-1)
+FromBatchDevice::FromBatchDevice() :
+	_datalink(-1), _n_recv(0), _recv_calls(0), _push_calls(0),
+	_promisc(0), _snaplen(0), _fd(-1)
 {
 #if HAVE_BATCH
 	in_batch_mode   = BATCH_MODE_YES;
@@ -337,7 +337,7 @@ FromBatchDevice::selected(int, int)
 	if ( !head || (pkts_no <= 0) ) {
 		goto clean;
 	}
-	
+
 	head->make_tail  (last, pkts_no);
 	output_push_batch(0, head);
 
