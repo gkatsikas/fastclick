@@ -15,20 +15,17 @@
  * legally binding.
  */
 
-#include <time.h>             /* struct timespec */
-#include <errno.h>            /* errno, perror, etc */
 #include <fcntl.h>            /* open */
 #include <stdlib.h>           /* calloc, free */
 #include <string.h>           /* memcpy */
 #include <unistd.h>           /* close */
-#include <sys/ioctl.h>        /* ioctl */
 #include <arpa/inet.h>        /* htons, ntohs */
-#include <sys/socket.h>       /* socket */
+#include <sys/socket.h>       /* socket, setsockopt */
 
 #include <net/if.h>           /* if_nametoindex */
 #include <netinet/udp.h>      /* udphdr  */
 #include <netinet/tcp.h>      /* tcphdr  */
-#include <netinet/ip_icmp.h>  /* icmphdr */
+#include <netinet/ip_icmp.h>  /* iphdr, icmphdr */
 
 #include <click/config.h>
 #include <click/packet.hh>

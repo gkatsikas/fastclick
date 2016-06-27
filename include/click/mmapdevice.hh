@@ -104,39 +104,58 @@ enum Mode {
 	RX_MODE
 };
 
+/*
+ * The data structure that helps to manage the ring buffers
+ */
 struct ring {
+	// An array of I/O vectors (ring descriptors)
 	struct iovec      *rd;
+	// A pointer to the starting point of the shared memory
 	void              *mmap_base;
+	// The size of the shared memory
 	size_t             mmap_len;
+	// The number of ring descriptors
+	unsigned           rd_num;
+	// The length of the ring descriptors's area
 	size_t             rd_len;
+	// Some link layer information about the socket
 	struct sockaddr_ll link_layer;
+	// Tx/Rx TPACKET information
+	// (http://lxr.free-electrons.com/source/include/uapi/linux/if_packet.h#L267)
 	struct tpacket_req rx_req;
 	struct tpacket_req tx_req;
 
+	// Maximum frame length suppported
 	int flen;
+	// The socket descriptor associated with the memory
 	int sock_fd;
+	// The TPACKET version we use (We support TPACKET_V1, TPACKET_V2)
 	int version;
 
+	// The name of the interface
 	String ifname;
 
+	// Tx/Rx polling data structures
 	struct pollfd tx_pfd;
 	struct pollfd rx_pfd;
 
-	unsigned   rd_num;
-
+	// The starting point of the Rx rings in the memory
 	void      *rx_rd_addr;
+	// The current index in this memory
 	unsigned   rx_rd_idx;
+	// The number of Rx ring descriptors
 	unsigned   rx_rd_num;
+	// The size of the Rx memory zone
 	unsigned   rx_rd_size;
-	unsigned   rx_rd_payload_offset;
-	unsigned   rx_rd_payload_max_size;
 
+	// The starting point of the Tx rings in the memory
 	void      *tx_rd_addr;
+	// The current index in this memory
 	unsigned   tx_rd_idx;
+	// The number of Tx ring descriptors
 	unsigned   tx_rd_num;
+	// The size of the tx memory zone
 	unsigned   tx_rd_size;
-	unsigned   tx_rd_payload_offset;
-	unsigned   tx_rd_payload_max_size;
 };
 
 struct block_desc {
@@ -145,6 +164,7 @@ struct block_desc {
 	struct tpacket_hdr_v1 h1;
 };
 
+// Frame representation using the TPACKET format
 union frame_map {
 	struct {
 		struct tpacket_hdr tp_h __aligned_tpacket;
@@ -167,10 +187,13 @@ CLICK_DECLS
 
 class MMapDevice {
 	public:
+		// The number of memory blocks
 		static int NB_BLOCKS;
+		// The size of each block in bytes
+		// A greater power of two of the page size
 		static int BLOCK_SIZE;
+		// The MTU will help us define the maximum frame size
 		static int MTU_SIZE;
-		static int BATCH_SIZE;
 
 		static int  initialize    (ErrorHandler *errh);
 		static int  static_cleanup();
@@ -227,6 +250,9 @@ class MMapDevice {
 
 		static void print_frame     (void *frame, size_t len);
 
+		/*
+		 * Device representation with statistics
+		 */
 		struct DevInfo {
 			bool rx;
 			bool tx;
@@ -274,10 +300,11 @@ class MMapDevice {
 		};
 
 	private:
+		static bool _debug;
+		static bool _verbose;
+		static bool _is_initialized;
+
 		//////////////// Data structures to manage a set of devices ////////////////
-		static bool                           _debug;
-		static bool                           _verbose;
-		static bool                           _is_initialized;
 		static HashMap<String, DevInfo>       _devs;
 		static HashMap<String, struct ring *> _ring_pool;
 		////////////////////////////////////////////////////////////////////////////
