@@ -178,6 +178,7 @@ class FromBatchDevice : public BatchElement {
 		int       _snaplen;
 		uint16_t  _protocol;
 		unsigned  _headroom;
+		bool      _verbose;
 
 		counter_t _n_recv;
 		counter_t _recv_calls;

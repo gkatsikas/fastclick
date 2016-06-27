@@ -92,7 +92,7 @@ FromMMapDevice::initialize(ErrorHandler *errh)
 		return ret;
 
 	if (KernelFilter::device_filter(_ifname, true, errh) < 0)
-		click_chatter("[%s] Failed to setup kernel filter", _ifname.c_str());
+		errh->warning("[%s] Failed to setup kernel filter", _ifname.c_str());
 
 	add_select(fd, SELECT_READ);
 

@@ -47,7 +47,7 @@ CLICK_DECLS
 
 FromBatchDevice::FromBatchDevice() :
 	_datalink(-1), _n_recv(0), _recv_calls(0), _push_calls(0),
-	_promisc(0), _snaplen(0), _fd(-1)
+	_promisc(0), _snaplen(0), _fd(-1), _verbose(false)
 {
 #if HAVE_BATCH
 	in_batch_mode   = BATCH_MODE_YES;
@@ -75,16 +75,17 @@ FromBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 	_burst_size = BATCHDEV_DEF_PREF_BATCH_SIZE;
 
 	if (Args(conf, this, errh)
-			.read_mp("DEVNAME",    _ifname)
-			.read_p("PROMISC",     promisc)
-			.read_p("SNAPLEN",     _snaplen)
-			.read("SNIFFER",       sniffer)
-			.read("FORCE_IP",      _force_ip)
-			.read("PROTOCOL",      _protocol)
-			.read("OUTBOUND",      outbound)
-			.read("HEADROOM",      _headroom)
-			.read("BURST",         _burst_size)
-			.read("TIMESTAMP",     timestamp)
+			.read_mp("DEVNAME",   _ifname)
+			.read_p ("PROMISC",   promisc)
+			.read_p ("SNAPLEN",   _snaplen)
+			.read   ("SNIFFER",   sniffer)
+			.read   ("FORCE_IP",  _force_ip)
+			.read   ("PROTOCOL",  _protocol)
+			.read   ("OUTBOUND",  outbound)
+			.read   ("HEADROOM",  _headroom)
+			.read   ("BURST",     _burst_size)
+			.read   ("TIMESTAMP", timestamp)
+			.read   ("VERBOSE",   _verbose)
 			.complete() < 0)
 		return -1;
 
@@ -106,6 +107,9 @@ FromBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 		return errh->error("[%s] [%s] FORCE_IP option not supported in batch mode",
 			name().c_str(), _ifname.c_str());
 
+	if ( _verbose )
+		click_chatter("[%s] [%s] Rx will batch up to BURST (%d) packets",
+				name().c_str(), _ifname.c_str(), _burst_size);
 
 	if ( (_burst_size < BATCHDEV_MIN_PREF_BATCH_SIZE) || (_burst_size > BATCHDEV_MAX_PREF_BATCH_SIZE) )
 		errh->warning("[%s] [%s] To improve the I/O performance set a BURST value in [%d-%d], preferably %d.",
@@ -296,7 +300,7 @@ FromBatchDevice::selected(int, int)
 
 	// Ask for a batch of packets with a single syscall.
 	int pkts_no = recvmmsg(_fd, _msgs, _burst_size, 0, NULL);
-	//click_chatter("[%s] [%s] %d packets received", name().c_str(), _ifname.c_str(), pkts_no);
+	//click_chatter("[%s] [%s] %4d packets received", name().c_str(), _ifname.c_str(), pkts_no);
 
 	// Something went wrong. Release the memory and re-schedule
 	if ( pkts_no == -1 ) {
@@ -326,18 +330,18 @@ FromBatchDevice::selected(int, int)
 		p->set_mac_header(p->data());
 
 		// Build-up the batch packet-by-packet
-		if ( head == NULL )
+		if ( !head )
 			head = PacketBatch::start_head(p);
 		else
 			last->set_next(p);
 		last = p;
 	}
 
-	// Assimilate the batch
 	if ( !head || (pkts_no <= 0) ) {
 		goto clean;
 	}
 
+	// Assimilate the batch
 	head->make_tail  (last, pkts_no);
 	output_push_batch(0, head);
 
@@ -350,8 +354,6 @@ FromBatchDevice::selected(int, int)
 	// Clean
 	clean:
 		// Reset the buffers and allocate space for the next batch
-		//memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
-		//memset(_msgs,   0, _burst_size * sizeof(struct mmsghdr));
 		for (i = 0; i < _burst_size; i++) {
 			_pkts  [i] = Packet::make(_headroom, 0, _snaplen, 0);
 			_iovecs[i].iov_base           = _pkts[i]->data();

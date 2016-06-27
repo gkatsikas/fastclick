@@ -167,6 +167,7 @@ class ToBatchDevice : public BatchElement {
 		short           _timeout;
 		bool            _blocking;
 		bool            _congestion_warning_printed;
+		bool            _verbose;
 
 	#if HAVE_BATCH
 		// Calculate some statistics when in batch mode

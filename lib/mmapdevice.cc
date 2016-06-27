@@ -53,6 +53,10 @@ MMapDevice::initialize(ErrorHandler *errh)
 	if ( _verbose )
 		click_chatter("[MMap Init] Successful");
 
+#if !HAVE_BATCH
+	errh->warning("[MMap Init] Batching is not enabled, the performance will be very low!");
+#endif
+
 	return 0;
 }
 
@@ -388,12 +392,6 @@ MMapDevice::close_socket(const String ifname, struct ring *ring)
 int
 MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *p)
 {
-	if ( !ring || (ring->ifname != ifname) ) {
-		click_chatter("[%s] [Walk Tx Ring] Failed to find memory region for this device",
-			ifname.c_str());
-		return -1;
-	}
-
 	union frame_map ppd;
 
 	if ( !p ) {
@@ -403,10 +401,6 @@ MMapDevice::walk_tx_ring_packet(const String ifname, struct ring *ring, Packet *
 	size_t packet_len = p->length();
 
 	DevInfo *info = _devs.findp(ifname);
-	if ( !info ) {
-		click_chatter("[%s] [Walk Tx Ring] Device not accessible", ifname.c_str());
-		return -1;
-	}
 
 	counter_t sent_pkts  = 0;
 	counter_t sent_bytes = 0;

@@ -34,7 +34,7 @@ CLICK_DECLS
 ToBatchDevice::ToBatchDevice() :
 	_task(this), _n_sent(0), _n_dropped(0),
 	_fd(-1), _my_fd(false),	_timeout(0), _blocking(false),
-	_congestion_warning_printed(false),
+	_congestion_warning_printed(false), _verbose(false),
 	_internal_tx_queue_size(-1)
 {
 #if HAVE_BATCH
@@ -61,6 +61,7 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 			.read   ("IQUEUE",   _internal_tx_queue_size)
 			.read   ("BLOCKING", _blocking)
 			.read   ("TIMEOUT",  _timeout)
+			.read   ("VERBOSE",  _verbose)
 			.complete() < 0)
 		return -1;
 
@@ -77,8 +78,9 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 	}
 
 #if HAVE_BATCH
-	click_chatter("[%s] [%s] Tx will batch up to BURST (%d) packets ",
-			name().c_str(), _ifname.c_str(), _burst_size);
+	if ( _verbose )
+		click_chatter("[%s] [%s] Tx will batch up to BURST (%d) packets",
+				name().c_str(), _ifname.c_str(), _burst_size);
 
 	if ( (_burst_size < BATCHDEV_MIN_PREF_BATCH_SIZE) || (_burst_size > BATCHDEV_MAX_PREF_BATCH_SIZE) )
 		errh->warning("[%s] [%s] To improve the I/O performance set a BURST value in [%d-%d], preferably %d.",
