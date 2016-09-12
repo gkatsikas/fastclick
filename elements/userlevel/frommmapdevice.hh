@@ -81,11 +81,9 @@ class FromMMapDevice : public BatchElement {
 		const char *class_name() const	{ return "FromMMapDevice"; }
 		const char *port_count() const	{ return "0/1-2"; }
 		const char *processing() const	{ return PUSH; }
+		int    configure_phase() const	{ return KernelFilter::CONFIGURE_PHASE_FROMDEVICE; }
 
 		enum { default_snaplen = 2046 };
-		int configure_phase() const {
-			return CONFIGURE_PHASE_PRIVILEGED - 5;
-		}
 
 		int configure    (Vector<String> &, ErrorHandler *) 	CLICK_COLD;
 		int initialize   (ErrorHandler *)			CLICK_COLD;
@@ -129,16 +127,9 @@ class FromMMapDevice : public BatchElement {
 		bool         _debug;
 
 		counter_t    _n_recv;
-		counter_t    _recv_calls;
-		counter_t    _push_calls;
 
-	#if HAVE_BATCH
-		// Calculate some statistics when in batch mode
-		int _inc_batch_size;
-	#endif
-
-		static String read_handler(Element*, void*) CLICK_COLD;
-		static int write_handler  (const String&, Element*, void*, ErrorHandler*) CLICK_COLD;
+		static String read_handler(Element *, void *) CLICK_COLD;
+		static int write_handler  (const String &, Element *, void *, ErrorHandler *) CLICK_COLD;
 };
 
 CLICK_ENDDECLS

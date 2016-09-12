@@ -169,12 +169,6 @@ class ToMMapDevice : public BatchElement {
 
 		counter_t       _n_sent;
 		counter_t       _n_dropped;
-		counter_t       _send_calls;
-
-	#if HAVE_BATCH
-		// Calculate some statistics when in batch mode
-		int  _inc_batch_size;
-	#endif
 
 		FromMMapDevice *find_fromdevice() const;
 
@@ -183,7 +177,7 @@ class ToMMapDevice : public BatchElement {
 		int send_batch (PacketBatch *batch);
 	#endif
 
-		enum { h_sent, h_dropped, h_avg_tx_bs };
+		enum { h_sent, h_dropped };
 		static String read_handler(Element*, void*) CLICK_COLD;
 };
 

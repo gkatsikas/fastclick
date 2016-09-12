@@ -34,7 +34,7 @@
 CLICK_DECLS
 
 int  MMapDevice::NB_BLOCKS       = 128;
-int  MMapDevice::BLOCK_SIZE      = sysconf(_SC_PAGESIZE) << 1;
+int  MMapDevice::BLOCK_SIZE      = sysconf(_SC_PAGESIZE) << 2;
 int  MMapDevice::MTU_SIZE        = 1526;
 bool MMapDevice::_debug          = false;
 bool MMapDevice::_verbose        = false;
@@ -592,6 +592,7 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 		click_chatter("[%s] [Walk Tx Ring] Failed to transmit the contents of the ring buffer", ifname.c_str());
 		return -1;
 	}
+
 	info->update_tx_info(sent_pkts, sent_bytes);
 
 	ring->tx_rd_idx = frame_num;

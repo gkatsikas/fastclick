@@ -181,12 +181,6 @@ class FromBatchDevice : public BatchElement {
 		bool      _verbose;
 
 		counter_t _n_recv;
-		counter_t _recv_calls;
-		counter_t _push_calls;
-
-	#if HAVE_BATCH
-		// Calculate some statistics when in batch mode
-		int _inc_batch_size;
 
 		// Data structures necessary to batch the Rx syscalls
 		// We pre-allocate an array of Click packets that point
@@ -195,7 +189,6 @@ class FromBatchDevice : public BatchElement {
 		WritablePacket **_pkts;
 		struct mmsghdr  *_msgs;
 		struct iovec    *_iovecs;
-	#endif
 
 		static String read_handler (Element*, void*) CLICK_COLD;
 		static int    write_handler(

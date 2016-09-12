@@ -151,7 +151,7 @@ class ToBatchDevice : public BatchElement {
 		// Internal queue to store packets to be emitted
 		// No need to use a Queue element anymore
 		TXInternalQueue _iqueue;
-		unsigned int    _internal_tx_queue_size;
+		int             _internal_tx_queue_size;
 
 		Task            _task;
 
@@ -161,7 +161,6 @@ class ToBatchDevice : public BatchElement {
 
 		counter_t       _n_sent;
 		counter_t       _n_dropped;
-		counter_t       _send_calls;
 
 		int             _burst_size;
 		short           _timeout;
@@ -170,13 +169,9 @@ class ToBatchDevice : public BatchElement {
 		bool            _verbose;
 
 	#if HAVE_BATCH
-		// Calculate some statistics when in batch mode
-		int  _inc_batch_size;
-
 		// Data structures necessary to batch the Tx syscalls
 		// We an I/O vector data structure with a batch of Click
 		// packets and emit them all with a single syscall.
-		struct msghdr    _batch_header;
 		struct mmsghdr  *_msgs;
 		struct iovec    *_iovecs;
 	#endif
@@ -185,7 +180,7 @@ class ToBatchDevice : public BatchElement {
 		int find_fromdevice_core() const;
 		int send_packet(Packet *p);
 
-		enum { h_sent, h_dropped, h_avg_tx_bs };
+		enum { h_sent, h_dropped };
 		static String read_handler(Element *e, void *thunk) CLICK_COLD;
 };
 

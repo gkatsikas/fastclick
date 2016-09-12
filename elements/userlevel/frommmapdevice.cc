@@ -27,12 +27,10 @@
 CLICK_DECLS
 
 FromMMapDevice::FromMMapDevice() :
-	_n_recv(0), _recv_calls(0), _push_calls(0),
-	_burst_size(32), _verbose(false), _debug(false)
+	_n_recv(0), _burst_size(32), _verbose(false), _debug(false)
 {
 #if HAVE_BATCH
-	in_batch_mode   = BATCH_MODE_YES;
-	_inc_batch_size = 0;
+	in_batch_mode = BATCH_MODE_YES;
 #endif
 }
 
@@ -162,9 +160,7 @@ FromMMapDevice::selected(int, int)
 		return;
 	}
 	output_push_batch(0, batch);
-	_n_recv         += batch->count();
-	_inc_batch_size += batch->count();
-	++_push_calls;
+	_n_recv += batch->count();
 #else
 	Packet *packet = MMapDevice::walk_rx_ring_packet(_ifname, _ring);
 	if ( !packet ) {
@@ -174,35 +170,23 @@ FromMMapDevice::selected(int, int)
 	}
 	output(0).push(packet);
 	++_n_recv;
-	++_push_calls;
 #endif
-	++_recv_calls;
 }
 
 String
 FromMMapDevice::read_handler(Element *e, void *thunk)
 {
-	FromMMapDevice *fd = static_cast<FromMMapDevice*>(e);
+	FromMMapDevice *fd = static_cast<FromMMapDevice *>(e);
 
 	if ( thunk == (void *) 0 )
 		return String(fd->_n_recv);
-	else if ( thunk == (void *) 1 )
-	#if HAVE_BATCH
-		return String( (float)(fd->_inc_batch_size) / (float)(fd->_recv_calls));
-	#else
-		return String( (float)(fd->_n_recv) / (float)(fd->_recv_calls));
-	#endif
-	else if ( thunk == (void *) 2 )
-		return String( (float)(fd->_n_recv) / (float)(fd->_push_calls));
 }
 
 int
 FromMMapDevice::write_handler(const String &, Element *e, void *, ErrorHandler *)
 {
-	FromMMapDevice *fd = static_cast<FromMMapDevice*>(e);
+	FromMMapDevice *fd = static_cast<FromMMapDevice *>(e);
 	fd->_n_recv     = 0;
-	fd->_recv_calls = 0;
-	fd->_push_calls = 0;
 	return 0;
 }
 
@@ -210,8 +194,6 @@ void
 FromMMapDevice::add_handlers()
 {
 	add_read_handler ("count",        read_handler,  0);
-	add_read_handler ("avg_rx_bs",    read_handler,  1);
-	add_read_handler ("avg_proc_bs",  read_handler,  2);
 	add_write_handler("reset_counts", write_handler, 0, Handler::BUTTON);
 }
 

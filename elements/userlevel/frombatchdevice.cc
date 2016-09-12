@@ -46,17 +46,15 @@
 CLICK_DECLS
 
 FromBatchDevice::FromBatchDevice() :
-	_datalink(-1), _n_recv(0), _recv_calls(0), _push_calls(0),
-	_promisc(0), _snaplen(0), _fd(-1), _verbose(false)
+	_datalink(-1), _n_recv(0), _promisc(0),
+	_snaplen(0), _fd(-1), _verbose(false)
 {
 #if HAVE_BATCH
-	in_batch_mode   = BATCH_MODE_YES;
-	_inc_batch_size = 0;
-
+	in_batch_mode = BATCH_MODE_YES;
+#endif
 	_pkts   = 0;
 	_msgs   = 0;
 	_iovecs = 0;
-#endif
 }
 
 FromBatchDevice::~FromBatchDevice()
@@ -149,7 +147,6 @@ FromBatchDevice::initialize(ErrorHandler *errh)
 		if (KernelFilter::device_filter(_ifname, true, errh) < 0)
 			_sniffer = true;
 
-#if HAVE_BATCH
 	// Pre-allocate memory for '_burst_size' packets
 	_msgs = (struct mmsghdr *)  malloc(_burst_size * sizeof(struct mmsghdr));
 	if ( !_msgs )
@@ -179,7 +176,6 @@ FromBatchDevice::initialize(ErrorHandler *errh)
 		_msgs  [i].msg_hdr.msg_iov    = &_iovecs[i];
 		_msgs  [i].msg_hdr.msg_iovlen = 1;
 	}
-#endif
 
 	return 0;
 }
@@ -198,7 +194,6 @@ FromBatchDevice::cleanup(CleanupStage stage)
 
 	_fd = -1;
 
-#if HAVE_BATCH
 	for (unsigned short i = 0; i < _burst_size; i++) {
 		if ( _pkts[i] )
 			_pkts[i]->kill();
@@ -210,7 +205,6 @@ FromBatchDevice::cleanup(CleanupStage stage)
 		free(_msgs);
 	if ( _iovecs )
 		free(_iovecs);
-#endif
 }
 
 int
@@ -285,18 +279,19 @@ FromBatchDevice::set_promiscuous(int fd, String ifname, bool promisc)
 }
 
 /*
- * In batch mode and when METHOD is LINUX, reading packets from the socket
- * is implemented in a different way such that the number of performed syscalls
- * is greatly reduced to amortize their overhead.
+ * Reading packets from the socket is implemented in a different way
+ * such that the number of performed syscalls is greatly reduced to
+ * amortize their overhead.
  */
-#if HAVE_BATCH
 void
 FromBatchDevice::selected(int, int)
 {
 	unsigned short i;
 
+#if HAVE_BATCH
 	PacketBatch    *head = NULL;
 	WritablePacket *last = NULL;
+#endif
 
 	// Ask for a batch of packets with a single syscall.
 	int pkts_no = recvmmsg(_fd, _msgs, _burst_size, 0, NULL);
@@ -304,117 +299,61 @@ FromBatchDevice::selected(int, int)
 
 	// Something went wrong. Release the memory and re-schedule
 	if ( pkts_no == -1 ) {
-		click_chatter("[%s] [%s] Error in recvfrom: %s",
-			name().c_str(), _ifname.c_str(), strerror(errno));
-		goto clean;
+		if ( _verbose ) {
+			click_chatter("[%s] [%s] Error in recvfrom: %s",
+				name().c_str(), _ifname.c_str(), strerror(errno));
+		}
 	}
-
-	++_recv_calls;
 
 	// We have a batch of packets at hand
 	for (i = 0; i < pkts_no; i++) {
-		WritablePacket *p = _pkts[i];
-
-		// click_chatter("[%s] [%s] Packet with size %d",
-		//		name().c_str(), _ifname.c_str(), _msgs[i].msg_len);
-
 		if ( _msgs[i].msg_len > _snaplen ) {
-			assert(p->length() == (uint32_t)_snaplen);
-			SET_EXTRA_LENGTH_ANNO(p, _msgs[i].msg_len - _snaplen);
+			assert(_pkts[i]->length() == (uint32_t)_snaplen);
+			SET_EXTRA_LENGTH_ANNO(_pkts[i], _msgs[i].msg_len - _snaplen);
 		}
 		else {
-			p->take(_snaplen - _msgs[i].msg_len);
+			_pkts[i]->take(_snaplen - _msgs[i].msg_len);
 		}
 
-		p->set_packet_type_anno(Packet::HOST);
-		p->set_mac_header(p->data());
+		_pkts[i]->set_packet_type_anno(Packet::HOST);
+		_pkts[i]->set_mac_header(_pkts[i]->data());
 
+		//click_chatter("[%s] [%s] Packet with size %d",
+		//		name().c_str(), _ifname.c_str(), _pkts[i]->length());
+
+	#if HAVE_BATCH
 		// Build-up the batch packet-by-packet
-		if ( !head )
-			head = PacketBatch::start_head(p);
+		if ( head == NULL )
+			head = PacketBatch::start_head(_pkts[i]);
 		else
-			last->set_next(p);
-		last = p;
+			last->set_next(_pkts[i]);
+		last = _pkts[i];
+	#else
+		output(0).push(_pkts[i]);
+	#endif
 	}
 
-	if ( !head || (pkts_no <= 0) ) {
-		goto clean;
-	}
-
+#if HAVE_BATCH
 	// Assimilate the batch
-	head->make_tail  (last, pkts_no);
-	output_push_batch(0, head);
-
-	++_push_calls;
-	_n_recv         += pkts_no;
-	_inc_batch_size += pkts_no;
-
-	goto clean;
-
-	// Clean
-	clean:
-		// Reset the buffers and allocate space for the next batch
-		for (i = 0; i < _burst_size; i++) {
-			_pkts  [i] = Packet::make(_headroom, 0, _snaplen, 0);
-			_iovecs[i].iov_base           = _pkts[i]->data();
-			_iovecs[i].iov_len            = _pkts[i]->length();
-			_msgs  [i].msg_hdr.msg_iov    = &_iovecs[i];
-			_msgs  [i].msg_hdr.msg_iovlen = 1;
-		}
-}
-
-#else  // #if HAVE_BATCH
-
-void
-FromBatchDevice::selected(int, int)
-{
-	int n = 0;
-
-	while ( n < _burst_size ) {
-		struct sockaddr_ll sa;
-		socklen_t fromlen = sizeof(sa);
-		WritablePacket *p = Packet::make(_headroom, 0, _snaplen, 0);
-
-		// Read from Linux socket
-		int len = recvfrom(_fd, p->data(), p->length(), MSG_TRUNC, (sockaddr *)&sa, &fromlen);
-		if ( len > 0 && (sa.sll_pkttype != PACKET_OUTGOING || _outbound )
-			&& (_protocol == 0 || _protocol == sa.sll_protocol)) {
-
-			if (len > _snaplen) {
-				assert(p->length() == (uint32_t)_snaplen);
-				SET_EXTRA_LENGTH_ANNO(p, len - _snaplen);
-			}
-			else {
-				p->take(_snaplen - len);
-			}
-
-			p->set_packet_type_anno((Packet::PacketType)sa.sll_pkttype);
-			p->timestamp_anno().set_timeval_ioctl(_fd, SIOCGSTAMP);
-			p->set_mac_header(p->data());
-
-			++n;
-			++_n_recv;
-			++_recv_calls;
-
-			// Ready to push
-			if ( !_force_ip || fake_pcap_force_ip(p, _datalink) ) {
-				output(0).push(p);
-			}
-			else {
-				checked_output_push(1, p);
-			}
-			++_push_calls;
-		}
-		else {
-			p->kill();
-			if (len <= 0 && errno != EAGAIN)
-				click_chatter("FromBatchDevice(%s): recvfrom: %s", _ifname.c_str(), strerror(errno));
-			break;
-		}
+	if ( head && pkts_no > 0 ) {
+		head->make_tail  (last, pkts_no);
+		output_push_batch(0, head);
+		_n_recv += pkts_no;
 	}
-}
+#else
+	_n_recv += pkts_no;
+#endif
 
-#endif  // #if HAVE_BATCH
+	// Reset the buffers for the next batch
+	for (i = 0; i < _burst_size; i++) {
+	//	_pkts  [i]->initialize_data();
+		_pkts  [i] = Packet::make(_headroom, 0, _snaplen, 0);
+		_iovecs[i].iov_base = _pkts[i]->data();
+		_iovecs[i].iov_len  = _pkts[i]->length();
+	}
+
+	return;
+}
 
 void
 FromBatchDevice::kernel_drops(bool &known, int &max_drops) const
@@ -432,7 +371,7 @@ FromBatchDevice::kernel_drops(bool &known, int &max_drops) const
 String
 FromBatchDevice::read_handler(Element *e, void *thunk)
 {
-	FromBatchDevice *fd = static_cast<FromBatchDevice*>(e);
+	FromBatchDevice *fd = static_cast<FromBatchDevice *>(e);
 	if (thunk == (void *) 0) {
 		int  max_drops;
 		bool known;
@@ -448,20 +387,12 @@ FromBatchDevice::read_handler(Element *e, void *thunk)
 	}
 	else if (thunk == (void *) 1)
 		return String(fd->_n_recv);
-	else if (thunk == (void *) 2)
-	#if HAVE_BATCH
-		return String( (float)(fd->_inc_batch_size) / (float)(fd->_recv_calls));
-	#else
-		return String( (float)(fd->_n_recv) / (float)(fd->_recv_calls));
-	#endif
-	else if (thunk == (void *) 3)
-		return String( (float)(fd->_n_recv) / (float)(fd->_push_calls));
 }
 
 int
 FromBatchDevice::write_handler(const String &, Element *e, void *, ErrorHandler *)
 {
-	FromBatchDevice *fd = static_cast<FromBatchDevice*>(e);
+	FromBatchDevice *fd = static_cast<FromBatchDevice *>(e);
 	fd->_n_recv = 0;
 	return 0;
 }
@@ -471,8 +402,6 @@ FromBatchDevice::add_handlers()
 {
 	add_read_handler ("kernel_drops", read_handler,  0);
 	add_read_handler ("count",        read_handler,  1);
-	add_read_handler ("avg_rx_bs",    read_handler,  2);
-	add_read_handler ("avg_proc_bs",  read_handler,  3);
 	add_write_handler("reset_counts", write_handler, 0, Handler::BUTTON);
 }
 

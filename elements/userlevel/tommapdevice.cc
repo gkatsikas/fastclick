@@ -33,10 +33,6 @@ ToMMapDevice::ToMMapDevice() :
 	_burst_size(32), _congestion_warning_printed(false),
 	_internal_tx_queue_size(-1), _verbose(false), _debug(false)
 {
-#if HAVE_BATCH
-	_inc_batch_size = 0;
-#endif
-	_send_calls     = 0;
 }
 
 ToMMapDevice::~ToMMapDevice()
@@ -190,7 +186,6 @@ ToMMapDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 		}
 
 		++sent;
-		++_send_calls;
 
 		iqueue.nr_pending --;
 		iqueue.index      ++;
@@ -218,15 +213,11 @@ ToMMapDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 	WritablePacket *last = NULL;
 
 	do {
-		WritablePacket *p = (WritablePacket *) iqueue.pkts[iqueue.index];
-
 		if ( !head )
-			head = PacketBatch::start_head(p);
+			head = PacketBatch::start_head(iqueue.pkts[iqueue.index]);
 		else
-			last->set_next(p);
-		last = p;
-
-		++pkts_in_batch;
+			last->set_next(iqueue.pkts[iqueue.index]);
+		last = (WritablePacket *) iqueue.pkts[iqueue.index];
 
 		iqueue.nr_pending --;
 		iqueue.index      ++;
@@ -234,6 +225,8 @@ ToMMapDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 		// Wrapping around the ring
 		if (iqueue.index >= _internal_tx_queue_size)
 			iqueue.index = 0;
+
+		++pkts_in_batch;
 
 	} while ( (iqueue.nr_pending > 0) && (pkts_in_batch < _burst_size) );
 
@@ -253,12 +246,9 @@ ToMMapDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 				name().c_str(), _ifname.c_str(), pkts_in_batch);
 		return;
 	}
-
 	//click_chatter("[%s] [%s] Sent: %2d packets", name().c_str(), _ifname.c_str(), sent);
 
-	++_send_calls;
-	_inc_batch_size += sent;
-	_n_sent         += sent;
+	_n_sent += sent;
 
 	// If ring is empty, reset the index to avoid wrap ups
 	if ( iqueue.nr_pending == 0 )
@@ -389,30 +379,21 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 String
 ToMMapDevice::read_handler(Element *e, void *thunk)
 {
-	ToMMapDevice *td = static_cast<ToMMapDevice*>(e);
+	ToMMapDevice *td = static_cast<ToMMapDevice *>(e);
 
 	switch((uintptr_t) thunk) {
 		case h_sent:
 			return String(td->_n_sent);
 		case h_dropped:
 			return String((bool) td->_n_dropped);
-		case h_avg_tx_bs:
-		#if HAVE_BATCH
-			return String( (float)(td->_inc_batch_size) / (float)(td->_send_calls));
-		#else
-			return String( (float)(td->_n_sent) / (float)(td->_send_calls));
-		#endif
-		default:
-			break;
 	}
 }
 
 void
 ToMMapDevice::add_handlers()
 {
-	add_read_handler ("sent",      read_handler,  h_sent);
-	add_read_handler ("dropped",   read_handler,  h_dropped);
-	add_read_handler ("avg_tx_bs", read_handler,  h_avg_tx_bs);
+	add_read_handler ("sent",    read_handler, h_sent);
+	add_read_handler ("dropped", read_handler, h_dropped);
 }
 
 CLICK_ENDDECLS

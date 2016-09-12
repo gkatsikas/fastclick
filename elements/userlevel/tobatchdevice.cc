@@ -38,11 +38,9 @@ ToBatchDevice::ToBatchDevice() :
 	_internal_tx_queue_size(-1)
 {
 #if HAVE_BATCH
-	_msgs           = 0;
-	_iovecs         = 0;
-	_inc_batch_size = 0;
+	_msgs   = 0;
+	_iovecs = 0;
 #endif
-	_send_calls     = 0;
 }
 
 ToBatchDevice::~ToBatchDevice()
@@ -71,7 +69,7 @@ ToBatchDevice::configure(Vector<String> &conf, ErrorHandler *errh)
 	if ( _burst_size <= 0 )
 		return errh->error("[%s] [%s] Bad BURST", name().c_str(), _ifname.c_str());
 
-	if ( _internal_tx_queue_size == 0 ) {
+	if ( _internal_tx_queue_size <= 0 ) {
 		_internal_tx_queue_size = 1024;
 		errh->warning("[%s] [%s] Non-positive IQUEUE size. Setting default (%d)",
 					name().c_str(), _ifname.c_str(), _internal_tx_queue_size);
@@ -161,11 +159,11 @@ ToBatchDevice::initialize(ErrorHandler *errh)
 			name().c_str(), _ifname.c_str());
 	memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
 
-	memset((struct msghdr *)&_batch_header, 0, sizeof(_batch_header));
-	_batch_header.msg_name       = NULL;
-	_batch_header.msg_namelen    = 0;
-	_batch_header.msg_control    = NULL;
-	_batch_header.msg_controllen = 0;
+	for (unsigned short i = 0; i < _burst_size; i++) {
+		// Message structure understood by the recvmmsg syscall
+		_msgs  [i].msg_hdr.msg_iov    = &_iovecs[i];
+		_msgs  [i].msg_hdr.msg_iovlen = 1;
+	}
 #endif
 
 	ScheduleInfo::initialize_task(this, &_task, false, errh);
@@ -240,7 +238,6 @@ ToBatchDevice::flush_internal_tx_queue(TXInternalQueue &iqueue)
 			break;
 
 		++sent;
-		++_send_calls;
 
 		iqueue.nr_pending --;
 		iqueue.index      ++;
@@ -266,19 +263,19 @@ ToBatchDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 
 	do {
 		// Add this packet to the vector ring
-		_iovecs[pkts_in_batch].iov_base           = (void *) iqueue.pkts[iqueue.index]->data();
-		_iovecs[pkts_in_batch].iov_len            = iqueue.pkts[iqueue.index]->length();
-		_msgs  [pkts_in_batch].msg_hdr.msg_iov    = &_iovecs[pkts_in_batch];
-		_msgs  [pkts_in_batch].msg_hdr.msg_iovlen = 1;
-
-		++pkts_in_batch;
+		_iovecs[pkts_in_batch].iov_base = (void *) iqueue.pkts[iqueue.index]->data();
+		_iovecs[pkts_in_batch].iov_len  = iqueue.pkts[iqueue.index]->length();
+		//_msgs  [pkts_in_batch].msg_hdr.msg_iov    = &_iovecs[pkts_in_batch];
+		//_msgs  [pkts_in_batch].msg_hdr.msg_iovlen = 1;
 
 		iqueue.nr_pending --;
 		iqueue.index      ++;
 
 		// Wrapping around the ring
-		if (iqueue.index >= _internal_tx_queue_size)
+		if ( iqueue.index >= _internal_tx_queue_size )
 			iqueue.index = 0;
+
+		++pkts_in_batch;
 
 	} while ( (iqueue.nr_pending > 0) && (pkts_in_batch < _burst_size) );
 
@@ -287,24 +284,28 @@ ToBatchDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 
 	// Problem occured
 	if ( sent == -1 ) {
-		//click_chatter("[%s] [%s] Failed to emit batch with %d packets",
-		//	name().c_str(), _ifname.c_str(), pkts_in_batch);
+		/*if ( _verbose ) {
+			click_chatter("[%s] [%s] Failed to emit batch with %d packets",
+				name().c_str(), _ifname.c_str(), pkts_in_batch);
+		}*/
 		return;
 	}
+	else if ( sent < pkts_in_batch ) {
+		//click_chatter("[%s] [%s] Sent %d/%d packets",
+		//		name().c_str(), _ifname.c_str(), sent, pkts_in_batch);
+		//sent += sendmmsg(_fd, &_msgs[sent], pkts_in_batch-sent, 0);
+	}
+	//click_chatter("[%s] [%s] Sent: %2d/%2d packets", name().c_str(), _ifname.c_str(), sent, pkts_in_batch);
 
-	//click_chatter("[%s] [%s] Sent: %2d packets", name().c_str(), _ifname.c_str(), sent);
-
-	++_send_calls;
-	_n_sent         += sent;
-	_inc_batch_size += sent;
+	_n_sent += sent;
 
 	// If ring is empty, reset the index to avoid wrap ups
 	if ( iqueue.nr_pending == 0 )
 		iqueue.index = 0;
 
 	// Clean the memory for the next batch
-	memset(_msgs,   0, _burst_size * sizeof(struct mmsghdr));
-	memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
+	//memset(_msgs,   0, _burst_size * sizeof(struct mmsghdr));
+	//memset(_iovecs, 0, _burst_size * sizeof(struct iovec));
 }
 #endif
 
@@ -432,19 +433,13 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 String
 ToBatchDevice::read_handler(Element *e, void *thunk)
 {
-	ToBatchDevice *td = static_cast<ToBatchDevice*>(e);
+	ToBatchDevice *td = static_cast<ToBatchDevice *>(e);
 
 	switch((uintptr_t) thunk) {
 		case h_sent:
 			return String(td->_n_sent);
 		case h_dropped:
 			return String((bool) td->_n_dropped);
-		case h_avg_tx_bs:
-		#if HAVE_BATCH
-			return String( (float)(td->_inc_batch_size) / (float)(td->_send_calls));
-		#else
-			return String( (float)(td->_n_sent) / (float)(td->_send_calls));
-		#endif
 		default:
 			break;
 	}
@@ -453,9 +448,8 @@ ToBatchDevice::read_handler(Element *e, void *thunk)
 void
 ToBatchDevice::add_handlers()
 {
-	add_read_handler ("sent",        read_handler,  h_sent);
-	add_read_handler ("dropped",     read_handler,  h_dropped);
-	add_read_handler ("avg_tx_bs",   read_handler,  h_avg_tx_bs);
+	add_read_handler ("sent",    read_handler, h_sent);
+	add_read_handler ("dropped", read_handler, h_dropped);
 }
 
 CLICK_ENDDECLS
