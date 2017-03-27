@@ -43,6 +43,8 @@ class NameInfo { public:
 	T_SIGNO = 0x00000004,		///< User-level signal names database
 	T_SPINLOCK = 0x00000005,	///< Spinlock names database
 	T_ETHERNET_ADDR = 0x01000001,	///< Ethernet address names database
+    T_ETHERNET_CLASS_TYPE = 0x01000002,  ///< SimpleEthernetClassifier instruction database
+    T_ETHERNET_TYPES_TO_HEX = 0x01000003,  ///< SimpleEthernetClassifier instruction database
 	T_IP_ADDR = 0x04000001,		///< IP address names database
 	T_IP_PREFIX = 0x04000002,	///< IP prefix names database
 	T_IP_PROTO = 0x04000003,	///< IP protocol names database
