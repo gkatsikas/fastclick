@@ -21,7 +21,7 @@
 #include <click/nameinfo.hh>
 #include "simpleethernetclassifier.hh"
 
-#define VERBOSE_MODE           true
+#define VERBOSE_MODE          false
 
 #define ETHERTYPE_OFFSET         12
 #define ETHERTYPE_ARP_OFFSET     20
