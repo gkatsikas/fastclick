@@ -188,6 +188,7 @@ IPRewriterBase::configure(Vector<String> &conf, ErrorHandler *errh)
     int32_t heapcap;
     bool use_cache = false;
     bool set_aggregate = false;
+    IPAddress addr;
 
     if (Args(this, errh).bind(conf)
 	.read("CAPACITY", AnyArg(), capacity_word)
@@ -209,6 +210,7 @@ IPRewriterBase::configure(Vector<String> &conf, ErrorHandler *errh)
 	.read("HEADROOM", _headroom)
 	.read("HONOR_DF", _honor_df)
 	.read("VERBOSE", _verbose)
+	.read("IPADDR", addr)
 	.consume() < 0)
 	return -1;
 
@@ -263,43 +265,51 @@ IPRewriterBase::configure(Vector<String> &conf, ErrorHandler *errh)
             return errh->error("bad MAPPING_CAPACITY");
     }
 
-
-
-    if (conf.size() != ninputs())
-	return errh->error("need %d arguments, one per input port", ninputs());
+    for (unsigned i=0; i<_mem_units_no; i++) {
+        if (has_timeout[0])
+            _timeouts[i][0] = timeouts[0];
+        if (has_timeout[1])
+            _timeouts[i][1] = timeouts[1];
+    }
 
     for (unsigned i=0; i<_mem_units_no; i++) {
         _timeouts[i][0] *= CLICK_HZ;    // _timeouts is measured in jiffies
         _timeouts[i][1] *= CLICK_HZ;
     }
 
-    bool has_ipaddr = false;
-    String ipaddr_pat = String("IPADDR");
     for (int i = 0; i < conf.size(); ++i) {
-
-        // IPADDR argument not handled above
-        int start_pos = conf[i].find_left(ipaddr_pat, 0);
-        if ( start_pos >= 0 ) {
-            has_ipaddr = true;
-            String ip = conf[i].substring(start_pos + ipaddr_pat.length() + 1, -1);
-            _my_ip = IPAddress(ip).in_addr();
-            continue;
-        }
-
         IPRewriterInput is;
         if (parse_input_spec(conf[i], is, i, errh) >= 0)
             _input_specs.push_back(is);
     }
 
-    int extra_params = has_ipaddr? 1:0;
-    if (conf.size()-extra_params != ninputs())
+    if (!addr.empty()) {
+        _my_ip = addr.in_addr();
+    }
+
+    if (conf.size() != ninputs())
         return errh->error("Need %d arguments, one per input port", ninputs());
 
     if ((_ip_fragment) && (_mtu < 8))
         return errh->error("MTU must be at least 8");
 
-    if ((_ipgw_opt || _fix_ip_src) && (_my_ip != 0))
+    if ((_ipgw_opt || _fix_ip_src) && (_my_ip == 0))
         return errh->error("IPGWOptions and/or FixIPSrc operations require IPADDR to be set");
+
+    if (_verbose) {
+        click_chatter("\n");
+        click_chatter("   DEC_IP_TTL: %s", _dec_ip_ttl? "True":"False");
+        click_chatter("   DROP_BCAST: %s", _drop_bcast? "True":"False");
+        click_chatter(" IPGW_OPTIONS: %s", _ipgw_opt? "True":"False");
+        click_chatter("   FIX_IP_SRC: %s", _fix_ip_src? "True":"False");
+        click_chatter("  IP_FRAGMENT: %s", _ip_fragment? "True":"False");
+        click_chatter("CALC_CHECKSUM: %s", _calc_checksum? "True":"False");
+        click_chatter("     HONOR_DF: %s", _honor_df? "True":"False");
+        click_chatter("      VERBOSE: %s", _verbose? "True":"False");
+        click_chatter("     HEADROOM: %d", _headroom);
+        click_chatter("          MTU: %d", _mtu);
+        click_chatter("       IPADDR: %s", IPAddress(_my_ip).s().c_str());
+    }
 
     return _input_specs.size() == ninputs() ? 0 : -1;
 }
