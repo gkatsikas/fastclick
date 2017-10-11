@@ -143,6 +143,24 @@ IPRewriter::process(int port, Packet *p_in)
             return -1;
     }
 
+    // SNF: Decrement IP TTL
+    // Do it here, before jumping to either UDP or TCP
+    if ( _dec_ip_ttl ) {
+        // Safe decrement
+        if ( iph->ip_ttl > 1 ) {
+            iph->ip_ttl --;
+            // Checksum is not mandatory anymore
+            if ( _calc_checksum ) {
+                unsigned long sum = (~ntohs(iph->ip_sum) & 0xFFFF) + 0xFEFF;
+                iph->ip_sum = ~htons(sum + (sum >> 16));
+            }
+        }
+        // End flow if TTL is 0
+        else {
+            return -1;
+        }
+    }
+
     IPFlowID flowid(p);
     HashContainer<IPRewriterEntry> *map = (iph->ip_p == IP_PROTO_TCP ?
         &_map[click_current_cpu_id()] : &state._udp_map);
@@ -169,14 +187,14 @@ IPRewriter::process(int port, Packet *p_in)
     IPRewriterFlow *mf = m->flow();
     if (iph->ip_p == IP_PROTO_TCP) {
 	TCPFlow *tcpmf = static_cast<TCPFlow *>(mf);
-	tcpmf->apply(p, m->direction(), _annos);
+	tcpmf->apply(p, m->direction(), _annos, _calc_checksum);
 	if (_timeouts[click_current_cpu_id()][1])
 	    tcpmf->change_expiry(_heap[click_current_cpu_id()], true, now_j + _timeouts[click_current_cpu_id()][1]);
 	else
 	    tcpmf->change_expiry(_heap[click_current_cpu_id()], false, now_j + tcp_flow_timeout(tcpmf));
     } else {
 	UDPFlow *udpmf = static_cast<UDPFlow *>(mf);
-	udpmf->apply(p, m->direction(), _annos);
+	udpmf->apply(p, m->direction(), _annos, _calc_checksum);
 	if (_state->_udp_timeouts[1])
 	    udpmf->change_expiry(_heap[click_current_cpu_id()], true, now_j + state._udp_timeouts[1]);
 	else

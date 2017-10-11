@@ -127,7 +127,7 @@ class TCPRewriter : public IPRewriterBase { public:
 	tcp_seq_t new_seq(bool direction, tcp_seq_t seqno) const;
 	tcp_seq_t new_ack(bool direction, tcp_seq_t seqno) const;
 
-	void apply(WritablePacket *p, bool direction, unsigned annos);
+	void apply(WritablePacket *p, bool direction, unsigned annos, bool calc_checksum);
 
 	void unparse(StringAccum &sa, bool direction, click_jiffies_t now) const;
 
@@ -150,7 +150,7 @@ class TCPRewriter : public IPRewriterBase { public:
 
 	delta_transition *_dt;
 
-	void apply_sack(bool direction, click_tcp *tcp, int transport_len);
+	void apply_sack(bool direction, click_tcp *tcp, int transport_len, bool calc_checksum);
 
     };
 

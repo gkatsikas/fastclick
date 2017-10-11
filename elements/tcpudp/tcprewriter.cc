@@ -87,7 +87,7 @@ TCPRewriter::TCPFlow::update_seqno_delta(bool direction,
 }
 
 void
-TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len)
+TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len, bool calc_checksum)
 {
     if ((int)(tcph->th_off << 2) < len)
 	len = tcph->th_off << 2;
@@ -108,11 +108,15 @@ TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len)
 		  goto done;
 	      } else {
 		  uint8_t *end_sack = opt + opt[1];
+		  uint16_t *csum_begin = 0;
 
-		  // develop initial checksum value
-		  uint16_t *csum_begin = reinterpret_cast<uint16_t *>(begin_opt + ((opt + 2 - begin_opt) & ~1));
-		  for (uint16_t *csum = csum_begin; reinterpret_cast<uint8_t *>(csum) < end_sack; csum++)
-		      csum_delta += ~*csum & 0xFFFF;
+		  // SNF extension: Allow to skip TCP checksum calculation
+		  if ( calc_checksum ) {
+		      // develop initial checksum value
+		      csum_begin = reinterpret_cast<uint16_t *>(begin_opt + ((opt + 2 - begin_opt) & ~1));
+		      for (uint16_t *csum = csum_begin; reinterpret_cast<uint8_t *>(csum) < end_sack; csum++)
+		          csum_delta += ~*csum & 0xFFFF;
+		  }
 
 		  for (opt += 2; opt < end_sack; opt += 8) {
 #if HAVE_INDIFFERENT_ALIGNMENT
@@ -128,10 +132,13 @@ TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len)
 #endif
 		  }
 
-		  // finish off csum_delta calculation
-		  for (uint16_t *csum = csum_begin; reinterpret_cast<uint8_t *>(csum) < end_sack; csum++)
-		      csum_delta += *csum;
-		  break;
+		  // SNF extension: Allow to skip TCP checksum calculation
+		  if ( calc_checksum ) {
+		      // finish off csum_delta calculation
+		      for (uint16_t *csum = csum_begin; reinterpret_cast<uint8_t *>(csum) < end_sack; csum++)
+		          csum_delta += *csum;
+		      break;
+		  }
 	      }
 	  default:
 	    if (opt[1] < 2)
@@ -141,7 +148,8 @@ TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len)
 	}
 
   done:
-    if (csum_delta) {
+    // SNF extension: Allow to skip TCP checksum calculation
+	if (csum_delta && !calc_checksum) {
 	uint32_t sum = (~tcph->th_sum & 0xFFFF) + csum_delta;
 	sum = (sum & 0xFFFF) + (sum >> 16);
 	tcph->th_sum = ~(sum + (sum >> 16));
@@ -149,7 +157,7 @@ TCPRewriter::TCPFlow::apply_sack(bool direction, click_tcp *tcph, int len)
 }
 
 void
-TCPRewriter::TCPFlow::apply(WritablePacket *p, bool direction, unsigned annos)
+TCPRewriter::TCPFlow::apply(WritablePacket *p, bool direction, unsigned annos, bool calc_checksum)
 {
     assert(p->has_network_header());
     click_ip *iph = p->ip_header();
@@ -162,7 +170,11 @@ TCPRewriter::TCPFlow::apply(WritablePacket *p, bool direction, unsigned annos)
 	p->set_dst_ip_anno(revflow.saddr());
     if (direction && (annos & 2))
 	p->set_anno_u8(annos >> 2, _reply_anno);
-    update_csum(&iph->ip_sum, direction, _ip_csum_delta);
+
+    // SNF extension: Allow to skip IP checksum calculation
+	if ( calc_checksum ) {
+		update_csum(&iph->ip_sum, direction, _ip_csum_delta);
+	}
 
     // end if not first fragment
     if (!IP_FIRSTFRAG(iph) || p->transport_length() < 18)
@@ -172,7 +184,10 @@ TCPRewriter::TCPFlow::apply(WritablePacket *p, bool direction, unsigned annos)
     click_tcp *tcph = p->tcp_header();
     tcph->th_sport = revflow.dport();
     tcph->th_dport = revflow.sport();
-    update_csum(&tcph->th_sum, direction, _udp_csum_delta);
+    // SNF extension: Allow to skip TCP checksum calculation
+	if ( calc_checksum ) {
+		update_csum(&tcph->th_sum, direction, _udp_csum_delta);
+	}
 
     // track connection state
     bool have_payload = ((iph->ip_hl + tcph->th_off) << 2) < ntohs(iph->ip_len);
@@ -206,22 +221,28 @@ TCPRewriter::TCPFlow::apply(WritablePacket *p, bool direction, unsigned annos)
 
     if (_dt->delta[direction] || _dt->has_trigger(direction)) {
 	uint32_t newval = htonl(new_seq(direction, ntohl(tcph->th_seq)));
-	click_update_in_cksum(&tcph->th_sum, tcph->th_seq >> 16, newval >> 16);
-	click_update_in_cksum(&tcph->th_sum, tcph->th_seq, newval);
+	// SNF extension: Allow to skip TCP checksum calculation
+	if ( calc_checksum ) {
+		click_update_in_cksum(&tcph->th_sum, tcph->th_seq >> 16, newval >> 16);
+		click_update_in_cksum(&tcph->th_sum, tcph->th_seq, newval);
+	}
 	tcph->th_seq = newval;
     }
 
     if (_dt->delta[!direction] || _dt->has_trigger(!direction)) {
 	uint32_t newval = htonl(new_ack(direction, ntohl(tcph->th_ack)));
-	click_update_in_cksum(&tcph->th_sum, tcph->th_ack >> 16, newval >> 16);
-	click_update_in_cksum(&tcph->th_sum, tcph->th_ack, newval);
+	// SNF extension: Allow to skip TCP checksum calculation
+	if ( calc_checksum ) {
+		click_update_in_cksum(&tcph->th_sum, tcph->th_ack >> 16, newval >> 16);
+		click_update_in_cksum(&tcph->th_sum, tcph->th_ack, newval);
+	}
 	tcph->th_ack = newval;
 
 	// update SACK sequence numbers
 	if (tcph->th_off > 8
 	    || (tcph->th_off == 8
 		&& *(reinterpret_cast<const uint32_t *>(tcph + 1)) != htonl(0x0101080A)))
-	    apply_sack(direction, tcph, p->transport_length());
+	    apply_sack(direction, tcph, p->transport_length(), calc_checksum);
     }
 }
 
@@ -350,7 +371,7 @@ TCPRewriter::process(int port, Packet *p_in)
     }
 
     TCPFlow *mf = static_cast<TCPFlow *>(m->flow());
-    mf->apply(p, m->direction(), _annos);
+    mf->apply(p, m->direction(), _annos, _calc_checksum);
 
     click_jiffies_t now_j = click_jiffies();
     if (_timeouts[click_current_cpu_id()][1])

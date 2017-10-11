@@ -180,7 +180,7 @@ class UDPRewriter : public IPRewriterBase { public:
 	    return _tflags > 6;
 	}
 
-	void apply(WritablePacket *p, bool direction, unsigned annos);
+	void apply(WritablePacket *p, bool direction, unsigned annos, bool calc_checksum);
 
     };
 

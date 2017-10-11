@@ -139,7 +139,7 @@ class IPRewriterFlow { public:
     static inline void update_csum(uint16_t *csum, bool direction,
 				   uint16_t csum_delta);
 
-    void apply(WritablePacket *p, bool direction, unsigned annos);
+    void apply(WritablePacket *p, bool direction, unsigned annos, bool calc_checksum);
 
     void unparse(StringAccum &sa, bool direction, click_jiffies_t now) const;
     void unparse_ports(StringAccum &sa, bool direction, click_jiffies_t now) const;
