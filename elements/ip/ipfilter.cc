@@ -55,7 +55,10 @@ static const StaticNameDB::Entry type_entries[] = {
     { "type", IPFilter::FIELD_ICMP_TYPE },
     { "unfrag", IPFilter::TYPE_IPUNFRAG },
     { "vers", IPFilter::FIELD_VERSION },
-    { "win", IPFilter::FIELD_TCP_WIN }
+    { "win", IPFilter::FIELD_TCP_WIN },
+    /* Fields IP_SRC and IP_DST added for SNF */
+    { "src", IPFilter::FIELD_IP_SRC},
+    { "dst", IPFilter::FIELD_IP_DST}
 };
 
 static const StaticNameDB::Entry tcp_opt_entries[] = {
@@ -261,7 +264,7 @@ IPFilter::Primitive::set_mask(uint32_t full_mask, int shift, uint32_t provided_m
 String
 IPFilter::Primitive::unparse_type(int srcdst, int type)
 {
-  StringAccum sa;
+    StringAccum sa;
 
     switch (srcdst) {
         case SD_SRC: sa << "src "; break;
@@ -294,6 +297,9 @@ IPFilter::Primitive::unparse_type(int srcdst, int type)
                     case FIELD_TTL: sa << "ip ttl"; break;
                     case FIELD_TCP_WIN: sa << "tcp win"; break;
                     case FIELD_ICMP_TYPE: sa << "icmp type"; break;
+                    /* Fields IP_SRC and IP_DST added for SNF */
+                    case FIELD_IP_SRC: sa << "ip src"; break;
+                    case FIELD_IP_DST: sa << "ip dst"; break;
                     default:
                         if (type & FIELD_PROTO_MASK)
                             sa << unparse_transp_proto((type & FIELD_PROTO_MASK) >> FIELD_PROTO_SHIFT);
@@ -307,7 +313,7 @@ IPFilter::Primitive::unparse_type(int srcdst, int type)
             break;
     }
 
-  return sa.take_string();
+    return sa.take_string();
 }
 
 String

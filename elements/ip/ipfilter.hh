@@ -186,24 +186,24 @@ class IPFilter : public BatchElement { public:
     inline int match(Packet *p);
 
     enum {
-        TYPE_NONE   = 0,        // data types
-        TYPE_TYPE   = 1,
-        TYPE_SYNTAX = 2,
-        TYPE_INT    = 3,
+        TYPE_NONE	= 0,		// data types
+        TYPE_TYPE	= 1,
+        TYPE_SYNTAX	= 2,
+        TYPE_INT	= 3,
 
-        TYPE_HOST   = 10,       // expression types
-        TYPE_PROTO  = 11,
-        TYPE_IPFRAG = 12,
-        TYPE_PORT   = 13,
-        TYPE_TCPOPT = 14,
-        TYPE_ETHER  = 15,
+        TYPE_HOST	= 10,		// expression types
+        TYPE_PROTO	= 11,
+        TYPE_IPFRAG	= 12,
+        TYPE_PORT	= 13,
+        TYPE_TCPOPT	= 14,
+        TYPE_ETHER	= 15,
 
-        TYPE_NET    = 30,       // shorthands
-        TYPE_IPUNFRAG   = 31,
-        TYPE_IPECT  = 32,
-        TYPE_IPCE   = 33,
+        TYPE_NET	= 30,		// shorthands
+        TYPE_IPUNFRAG	= 31,
+        TYPE_IPECT	= 32,
+        TYPE_IPCE	= 33,
 
-        TYPE_FIELD  = 0x40000000,
+        TYPE_FIELD	= 0x40000000,
         // bit 31 must be zero
         // bit 30 must be one
         // bits 29-21 represent IP protocol (9 bits); 0 means no protocol
@@ -215,16 +215,19 @@ class IPFilter : public BatchElement { public:
         FIELD_OFFSET_MASK = (0xFFFF << FIELD_OFFSET_SHIFT),
         FIELD_LENGTH_SHIFT = 0,
         FIELD_LENGTH_MASK = (0x1F << FIELD_LENGTH_SHIFT),
-        FIELD_CSUM  = (TYPE_FIELD | ((10*8) << FIELD_OFFSET_SHIFT) | 15),
-        FIELD_IPLEN = (TYPE_FIELD | ((2*8) << FIELD_OFFSET_SHIFT) | 15),
-        FIELD_ID    = (TYPE_FIELD | ((4*8) << FIELD_OFFSET_SHIFT) | 15),
-        FIELD_VERSION   = (TYPE_FIELD | (0 << FIELD_OFFSET_SHIFT) | 3),
-        FIELD_HL    = (TYPE_FIELD | (4 << FIELD_OFFSET_SHIFT) | 3),
-        FIELD_TOS   = (TYPE_FIELD | ((1*8) << FIELD_OFFSET_SHIFT) | 7),
-        FIELD_DSCP  = (TYPE_FIELD | ((1*8) << FIELD_OFFSET_SHIFT) | 5),
-        FIELD_TTL   = (TYPE_FIELD | ((8*8) << FIELD_OFFSET_SHIFT) | 7),
+        FIELD_CSUM	= (TYPE_FIELD | ((10*8) << FIELD_OFFSET_SHIFT) | 15),
+        FIELD_IPLEN	= (TYPE_FIELD | ((2*8) << FIELD_OFFSET_SHIFT) | 15),
+        FIELD_ID	= (TYPE_FIELD | ((4*8) << FIELD_OFFSET_SHIFT) | 15),
+        FIELD_VERSION	= (TYPE_FIELD | (0 << FIELD_OFFSET_SHIFT) | 3),
+        FIELD_HL	= (TYPE_FIELD | (4 << FIELD_OFFSET_SHIFT) | 3),
+        FIELD_TOS	= (TYPE_FIELD | ((1*8) << FIELD_OFFSET_SHIFT) | 7),
+        FIELD_DSCP	= (TYPE_FIELD | ((1*8) << FIELD_OFFSET_SHIFT) | 5),
+        FIELD_TTL	= (TYPE_FIELD | ((8*8) << FIELD_OFFSET_SHIFT) | 7),
         FIELD_TCP_WIN = (TYPE_FIELD | (IP_PROTO_TCP << FIELD_PROTO_SHIFT) | ((14*8) << FIELD_OFFSET_SHIFT) | 15),
-        FIELD_ICMP_TYPE = (TYPE_FIELD | (IP_PROTO_ICMP << FIELD_PROTO_SHIFT) | (0 << FIELD_OFFSET_SHIFT) | 7)
+        FIELD_ICMP_TYPE = (TYPE_FIELD | (IP_PROTO_ICMP << FIELD_PROTO_SHIFT) | (0 << FIELD_OFFSET_SHIFT) | 7),
+        /* Fields IP_SRC and IP_DST added for SNF */
+        FIELD_IP_SRC = (TYPE_FIELD | ((12*8) << FIELD_OFFSET_SHIFT) | 31),
+        FIELD_IP_DST = (TYPE_FIELD | ((16*8) << FIELD_OFFSET_SHIFT) | 31)
     };
 
     enum {
