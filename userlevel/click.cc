@@ -3,12 +3,16 @@
  * click.cc -- user-level Click main program
  * Eddie Kohler
  *
+ * Extensions to allow optional deactivation of the router's complete initialization
+ * Georgios Katsikas
+ *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
  * Copyright (c) 2000 Mazu Networks, Inc.
  * Copyright (c) 2001-2003 International Computer Science Institute
  * Copyright (c) 2004-2006 Regents of the University of California
  * Copyright (c) 2008-2009 Meraki, Inc.
  * Copyright (c) 1999-2015 Eddie Kohler
+ * Copyright (c) 2016 KTH Royal Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -402,8 +406,9 @@ parse_configuration(const String &text, bool text_is_expr, bool hotswap,
   if (hotswap && click_router && click_router->initialized())
       router->set_hotswap_router(click_router);
 
+  bool initialize_only_dag = false;
   if (errh->nerrors() == before_errors
-      && router->initialize(errh) >= 0)
+      && router->initialize(errh, initialize_only_dag) >= 0)
     return router;
   else {
     delete router;

@@ -3,10 +3,14 @@
  * router.{cc,hh} -- a Click router configuration
  * Eddie Kohler
  *
+ * Extensions to allow optional deactivation of the router's complete initialization
+ * Georgios Katsikas
+ *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
  * Copyright (c) 2000 Mazu Networks, Inc.
  * Copyright (c) 2004-2007 Regents of the University of California
  * Copyright (c) 2008 Meraki, Inc.
+ * Copyright (c) 2016 KTH Royal Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -90,7 +94,8 @@ Router::Router(const String &configuration, Master *master)
       _configuration(configuration),
       _notifier_signals(0),
       _arena_factory(new HashMap_ArenaFactory),
-      _hotswap_router(0), _thread_sched(0), _name_info(0), _next_router(0)
+      _hotswap_router(0), _thread_sched(0), _name_info(0), _next_router(0),
+      _do_not_initialize(false)
 {
     _refcount = 0;
     _runcount = 0;
@@ -124,7 +129,9 @@ Router::~Router()
         for (int ord = _elements.size() - 1; ord >= 0; ord--)
             _elements[ _element_configure_order[ord] ]->cleanup(Element::CLEANUP_ROUTER_INITIALIZED);
     } else if (_state != ROUTER_DEAD) {
-        assert(_element_configure_order.size() == 0 && _state <= ROUTER_PRECONFIGURE);
+        // We do not follow all the Click states when _do_not_initialize is true
+        if (!_do_not_initialize)
+            assert(_element_configure_order.size() == 0 && _state <= ROUTER_PRECONFIGURE);
         for (int i = _elements.size() - 1; i >= 0; i--)
             _elements[i]->cleanup(Element::CLEANUP_NO_ROUTER);
     }
@@ -158,6 +165,12 @@ Router::~Router()
         delete ns;
     }
     delete _name_info;
+
+    // Return here in case that the router has been constructed by setting this member to true.
+    // In this case we haven't registered our Router in the first place.
+    if (_do_not_initialize)
+        return;
+
     if (_master)
         _master->unregister_router(this);
 }
@@ -1263,7 +1276,7 @@ Router::InitFuture::post(InitFuture* future) {
 
 
 int
-Router::initialize(ErrorHandler *errh)
+Router::initialize(ErrorHandler *errh, bool do_not_initialize)
 {
     if (_state != ROUTER_NEW)
         return errh->error("second attempt to initialize router");
@@ -1341,6 +1354,16 @@ Router::initialize(ErrorHandler *errh)
             } else
                 element_stage[i] = Element::CLEANUP_CONFIGURED;
         }
+    }
+
+    /**
+     * SNF modification to prevent the initialization of Click elements
+     * It happens only when the boolean argument is true. Default is false.
+     */
+    if (do_not_initialize) {
+        // This field is useful in the destructor
+        _do_not_initialize = true;
+        return 0;
     }
 
 #if HAVE_DPDK_PACKET_POOL

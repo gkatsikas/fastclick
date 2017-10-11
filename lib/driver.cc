@@ -3,9 +3,13 @@
  * driver.cc -- support for packages
  * Eddie Kohler
  *
+ * Extensions to allow optional deactivation of the router's complete initialization
+ * Georgios Katsikas
+ *
  * Copyright (c) 2001 Mazu Networks, Inc.
  * Copyright (c) 2003 International Computer Science Institute
  * Copyright (c) 2007 Regents of the University of California
+ * Copyright (c) 2016 KTH Royal Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -535,8 +539,10 @@ click_read_router(String filename, bool is_expr, ErrorHandler *errh, bool initia
     l->end_parse(cookie);
 
     // initialize if requested
+    // SNF extension: If initialize_only_dag is true, the router's elements are not initialized.
+    bool initialize_only_dag = false;
     if (initialize)
-        if (errh->nerrors() > before || router->initialize(errh) < 0) {
+        if (errh->nerrors() > before || router->initialize(errh, initialize_only_dag) < 0) {
             delete router;
             return 0;
         }
