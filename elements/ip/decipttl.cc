@@ -2,7 +2,7 @@
  * decipttl.{cc,hh} -- element decrements IP packet's time-to-live
  * Eddie Kohler, Robert Morris
  *
- * Computational batching support
+ * Computational batching support and optional checksum calculation
  * by Georgios Katsikas
  *
  * Copyright (c) 1999-2000 Massachusetts Institute of Technology
@@ -28,7 +28,7 @@
 CLICK_DECLS
 
 DecIPTTL::DecIPTTL()
-    : _active(true), _multicast(true)
+    : _active(true), _multicast(true), _calc_checksum(true)
 {
     _drops = 0;
 }
@@ -42,6 +42,7 @@ DecIPTTL::configure(Vector<String> &conf, ErrorHandler *errh)
 {
     return Args(conf, this, errh)
 	.read("ACTIVE", _active)
+	.read("CALC_CHECKSUM", _calc_checksum)
 	.read("MULTICAST", _multicast).complete();
 }
 
@@ -64,7 +65,13 @@ DecIPTTL::simple_action(Packet *p)
 	if (!q)
 	    return 0;
 	click_ip *ip = q->ip_header();
+
+	// Decrement
 	--ip->ip_ttl;
+
+	// Do not calculate IP checksum if you are requested to do so
+	if (!_calc_checksum)
+	    return q;
 
 	// 19.Aug.1999 - incrementally update IP checksum as suggested by SOSP
 	// reviewers, according to RFC1141, as updated by RFC1624.
@@ -94,6 +101,7 @@ DecIPTTL::add_handlers()
 {
     add_data_handlers("drops", Handler::OP_READ, &_drops);
     add_data_handlers("active", Handler::OP_READ | Handler::OP_WRITE | Handler::CHECKBOX, &_active);
+    add_data_handlers("calc_checksum", Handler::OP_READ | Handler::OP_WRITE | Handler::CHECKBOX, &_calc_checksum);
 }
 
 CLICK_ENDDECLS

@@ -31,6 +31,11 @@ CLICK_DECLS
  * Boolean.  If false, do not decrement the TTLs for multicast packets.
  * Defaults to true.
  *
+ * =item CALC_CHECKSUM
+ * Boolean. If false, the element does not calculate the IP checksum,
+ * since it is assumed that a subsequent element will do so.
+ * Defaults to true.
+ *
  * =back
  *
  * =e
@@ -64,6 +69,7 @@ class DecIPTTL : public BatchElement { public:
     atomic_uint32_t _drops;
     bool _active;
     bool _multicast;
+    bool _calc_checksum;    // Make the checksum calculation optional
 };
 
 CLICK_ENDDECLS
