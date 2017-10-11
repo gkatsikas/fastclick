@@ -4,8 +4,11 @@
  *
  * Integration of DPDK's Flow API by Georgios Katsikas
  *
+ * Symmetric RSS added by Georgios Katsikas
+ *
  * Copyright (c) 2014-2016 University of Liege
  * Copyright (c) 2016 Cisco Meraki
+ * Copyright (c) 2015-2016 KTH Royal Institute of Technology
  * Copyright (c) 2017 RISE SICS
  * Copyright (c) 2018-2019 KTH Royal Institute of Technology
  *
@@ -41,6 +44,20 @@ extern "C" {
 #endif
 
 CLICK_DECLS
+
+/**
+ * SNF: A group of smart people found that there is a specific hash key
+ *      which gives you both symmetrical flow distribution and a uniform one.
+ *      You can read about it in their published paper:
+ *            http://www.ndsl.kaist.edu/~kyoungsoo/papers/TR-symRSS.pdf
+ *      Some tests have been done to check the uniform distribution of this key
+ *      with random IP traffic and found it to be good (and symmetrical).
+ *      The hash key (in case you don't want to read the document) is:
+ */
+static uint8_t symmetric_hashkey[40] = {
+    0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+    0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A
+};
 
 DPDKDevice::DPDKDevice() : port_id(-1), info() {
 }
@@ -491,7 +508,7 @@ int DPDKDevice::initialize_device(ErrorHandler *errh)
     }
 
     if (info.mq_mode & ETH_MQ_RX_RSS_FLAG) {
-        dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
+        dev_conf.rx_adv_conf.rss_conf.rss_key = symmetric_hashkey;  // SNF: Symmetric RSS
         dev_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IP | ETH_RSS_UDP | ETH_RSS_TCP;
         dev_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
     }
