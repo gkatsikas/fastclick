@@ -2,9 +2,12 @@
  * ipfilter.{cc,hh} -- IP-packet filter with tcpdumplike syntax
  * Eddie Kohler
  *
+ * Additional IP address fields added by Georgios Katsikas
+ *
  * Copyright (c) 2000-2007 Mazu Networks, Inc.
  * Copyright (c) 2010 Meraki, Inc.
  * Copyright (c) 2004-2011 Regents of the University of California
+ * Copyright (c) 2016 KTH Royal Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
