@@ -67,9 +67,9 @@ class IPOutputCombo : public BatchElement {
 
  private:
 
-  int _color;			        // PaintTee
-  struct in_addr _my_ip;	// IPGWOptions, FixIPSrc
-  unsigned _mtu;		      // Fragmenter
+  int _color;             // PaintTee
+  struct in_addr _my_ip;  // IPGWOptions, FixIPSrc
+  unsigned _mtu;          // Fragmenter
   bool _calc_checksum;    // Make the checksum calculation optional
 
   inline int action(Packet* p_in, bool color = true);
