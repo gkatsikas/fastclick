@@ -321,7 +321,7 @@ IPSynthesizer::fragment(Packet *p_in, const int &output_port)
 			);
 
 		_drops++;
-	    
+
 	    // if (receives_batch)
 	    //     checked_output_push_batch(1, PacketBatch::make_from_packet(p_in));
 	    // else
