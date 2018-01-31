@@ -37,7 +37,7 @@ class Idle : public BatchElement {
   const char *processing() const override { return "a/a"; }
   const char *flow_code() const  override { return "x/y"; }
   void *cast(const char *);
-  const char *flags() const   { return "S0"; }
+  const char *flags() const { return "S0"; }
 
   void push(int, Packet *);
   Packet *pull(int);
