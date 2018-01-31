@@ -21,7 +21,8 @@
 #include <click/nameinfo.hh>
 #include "simpleethernetclassifier.hh"
 
-#define VERBOSE_MODE          false
+#define DEBUG_MODE            false
+#define VERBOSE_MODE           true
 
 #define ETHERTYPE_OFFSET         12
 #define ETHERTYPE_ARP_OFFSET     20
@@ -61,7 +62,7 @@ static const StaticNameDB::Entry type_hex_values[] = {
 static void
 separate_text(const String &text, Vector<String> &words)
 {
-    const char* s = text.data();
+    const char *s = text.data();
     int len = text.length();
     int pos = 0;
     while (pos < len) {
@@ -92,9 +93,9 @@ separate_text(const String &text, Vector<String> &words)
 
             default: {
                 int first = pos;
-                while ( pos < len && (isalnum((unsigned char) s[pos]) ||
-                        s[pos] == '-' || s[pos] == '.' || s[pos] == '/' ||
-                        s[pos] == '@' || s[pos] == '_' || s[pos] == ':'))
+                while (pos < len && (isalnum((unsigned char) s[pos]) ||
+                       s[pos] == '-' || s[pos] == '.' || s[pos] == '/' ||
+                       s[pos] == '@' || s[pos] == '_' || s[pos] == ':'))
                     pos++;
 
                 if (pos == first)
@@ -110,6 +111,7 @@ separate_text(const String &text, Vector<String> &words)
 
 SimpleEthernetClassifier::SimpleEthernetClassifier()
 {
+    _debug_mode   = DEBUG_MODE;
     _verbose      = VERBOSE_MODE;
     _has_wildcard = false;
 
@@ -119,42 +121,36 @@ SimpleEthernetClassifier::SimpleEthernetClassifier()
     _wilcard = NULL;
 
     _tc_to_offset = new HashTable<String, HashTable<unsigned short, unsigned short>>();
-
-    _eth_type_to_tc_label  = new HashTable<unsigned short, String>();
     _eth_type_to_tc_proto  = new HashTable<unsigned short, String>();
     _eth_type_to_tree_node = new HashTable<unsigned short, TreeNode *>();
 }
 
 SimpleEthernetClassifier::~SimpleEthernetClassifier()
 {
-    if ( _verbose ) {
+    if (_verbose) {
         click_chatter(
-            "\n[%s] Matched packets: %" PRIu64 "", name().c_str(), matched_packets_nb()
+            "\n[%s] Matched packets: %" PRIu64 " - Dropped packets: %" PRIu64 "",
+            name().c_str(), matched_packets_nb(), dropped_packets_nb()
         );
     }
 
-    if ( _tc_to_offset) {
+    if (_tc_to_offset) {
         delete _tc_to_offset;
         _tc_to_offset = NULL;
     }
 
-    if ( _eth_type_to_tc_label) {
-        delete _eth_type_to_tc_label;
-        _eth_type_to_tc_label = NULL;
-    }
-
-    if ( _eth_type_to_tc_proto) {
+    if (_eth_type_to_tc_proto) {
         delete _eth_type_to_tc_proto;
         _eth_type_to_tc_proto = NULL;
     }
 
     // Recursively deletes the entire tree
-    if ( _root ) {
+    if (_root ) {
         delete _root;
         _root = NULL;
     }
 
-    if ( _eth_type_to_tree_node) {
+    if (_eth_type_to_tree_node) {
         delete _eth_type_to_tree_node;
         _eth_type_to_tree_node = NULL;
     }
@@ -184,7 +180,7 @@ SimpleEthernetClassifier::static_initialize()
 void
 SimpleEthernetClassifier::static_cleanup()
 {
-    if ( !dbs ) {
+    if (!dbs) {
         return;
     }
 
@@ -203,15 +199,15 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
         Vector<String> words;
         separate_text(label, words);
         String protocol = words[0];
-        String subclass;
         bool has_subclass = false;
+        click_chatter("");
 
         // Wildcard traffic class that covers the remaining traffic types
-        if (    (protocol.length() == 1 || protocol.length() == 3) &&
-                (protocol == "-" || protocol == "any" || protocol == "all")) {
+        if ((protocol.length() == 1 || protocol.length() == 3) &&
+            (protocol == "-" || protocol == "any" || protocol == "all")) {
             // Only one wildcard is allowed
-            if ( _has_wildcard ) {
-                click_chatter("Duplicate Wildcard rule");
+            if (_has_wildcard) {
+                click_chatter("Duplicate wildcard rule");
                 return -1;
             }
 
@@ -221,8 +217,7 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
         }
 
         // There is a subclass. Only one subclass type is currently supported
-        if ( words.size() > 1 ) {
-            subclass = words[1];
+        if (words.size() > 1) {
             has_subclass = true;
         }
 
@@ -230,7 +225,7 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
         int got = 0;
         int32_t tc_type_idx = 0;
         got = NameInfo::query_int(NameInfo::T_ETHERNET_CLASS_TYPE, 0, label, &tc_type_idx);
-        if ( !got ) {
+        if (!got) {
             click_chatter("Failed to retrieve the class name of %s", label.c_str());
             return -1;
         }
@@ -238,7 +233,7 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
         /**
          * Store the header offsets and values of this traffic class
          */
-        if ( !create_patterns(label, tc_type_idx, errh) ) {
+        if (!create_patterns(label, tc_type_idx, errh)) {
             return -1;
         }
 
@@ -248,7 +243,7 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
          */
         int primary_proto = 0;
         got = NameInfo::query_int(NameInfo::T_ETHERNET_TYPES_TO_HEX, 0, protocol, &primary_proto);
-        if ( !got ) {
+        if (!got) {
             errh->error(
                 "Failed to retrieve the hex type of %s",
                 protocol.c_str()
@@ -260,7 +255,7 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
          * Some of the supported classification options
          * are not currently supported by Click.
          */
-        if ( !is_supported_by_click(primary_proto) ) {
+        if (!is_supported_by_click(primary_proto)) {
             errh->error(
                 "Ethernet type %s is not currently supported by Click",
                 label.c_str()
@@ -277,11 +272,12 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
          * Add a node in the classification tree.
          */
         TreeNode *added_node = _root->add_child(
-            protocol, protocol, primary_offset, sizeof(primary_offset), primary_proto, port_no
+            protocol, protocol, primary_offset,
+            sizeof(primary_offset), primary_proto, port_no
         );
 
         // This case should never happen
-        if ( !added_node && !has_subclass ) {
+        if (!added_node && !has_subclass) {
             errh->error(
                 "Failed to create a pattern for %s",
                 label.c_str()
@@ -289,13 +285,12 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
             return -1;
         }
         // This traffic class requires to branch our tree
-        else if ( has_subclass ) {
-            added_node = add_subclass(label, protocol, port_no, errh);
+        else if (has_subclass) {
+            TreeNode *child = add_subclass(label, protocol, port_no, errh);
 
-            if ( !added_node ) {
+            if (!child) {
                 errh->error(
-                    "Failed to create a pattern for %s",
-                    label.c_str()
+                    "Failed to create a pattern for %s", label.c_str()
                 );
                 return -1;
             }
@@ -303,14 +298,12 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
 
         /**
          * Map the input type to a traffic class, such that
-         * we can directly fetch the output port when we see
-         * this type.
+         * we can fetch the output port when we see this type.
          */
-        _eth_type_to_tc_label->find_insert(primary_proto, label);
         _eth_type_to_tc_proto->find_insert(primary_proto, protocol);
 
         TreeNode *parent = _root->base_lookup(protocol);
-        if ( !parent ) {
+        if (!parent) {
             errh->error(
                 "Unavailable classifier for %s",
                 label.c_str()
@@ -326,9 +319,11 @@ SimpleEthernetClassifier::configure(Vector<String> &conf, ErrorHandler *errh)
      */
     _root->activate(conf);
 
-    if ( _verbose ) {
+    if (_verbose)
         _root->print_node();
-    }
+
+    if (_debug_mode)
+        print_debug_info();
 
     return 0;
 }
@@ -341,7 +336,7 @@ SimpleEthernetClassifier::is_supported_by_click(int tc_type_idx)
     /**
      * Currently, Click does not support MPLS.
      */
-    if ( tc_type == ETH_CLASSIFIER_TYPE::MPLS ) {
+    if (tc_type == ETH_CLASSIFIER_TYPE::MPLS) {
         return false;
     }
 
@@ -366,27 +361,27 @@ SimpleEthernetClassifier::create_patterns(
             break;
         case ETH_CLASSIFIER_TYPE::ARP_RES:
             offsets.find_insert(ETHERTYPE_ARP,     ETHERTYPE_OFFSET);
-            offsets.find_insert(ETHERTYPE_ARP_RES, ETHERTYPE_ARP_OFFSET);           
+            offsets.find_insert(ETHERTYPE_ARP_RES, ETHERTYPE_ARP_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::IPV4:
-            offsets.find_insert(ETHERTYPE_IP,    ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_IP,      ETHERTYPE_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::IPV6:
-            offsets.find_insert(ETHERTYPE_IP6,   ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_IP6,     ETHERTYPE_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::MPLS:
-            offsets.find_insert(ETHERTYPE_MPLS,  ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_MPLS,    ETHERTYPE_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::VLAN:
-            offsets.find_insert(ETHERTYPE_8021Q, ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_8021Q,   ETHERTYPE_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::VLAN_IPV4:
-            offsets.find_insert(ETHERTYPE_8021Q, ETHERTYPE_OFFSET);
-            offsets.find_insert(ETHERTYPE_IP,    ETHERTYPE_VLAN_IP_OFFSET);
+            offsets.find_insert(ETHERTYPE_8021Q,   ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_IP,      ETHERTYPE_VLAN_IP_OFFSET);
             break;
         case ETH_CLASSIFIER_TYPE::VLAN_IPV6:
-            offsets.find_insert(ETHERTYPE_8021Q, ETHERTYPE_OFFSET);
-            offsets.find_insert(ETHERTYPE_IP6,   ETHERTYPE_VLAN_IP_OFFSET);
+            offsets.find_insert(ETHERTYPE_8021Q,   ETHERTYPE_OFFSET);
+            offsets.find_insert(ETHERTYPE_IP6,     ETHERTYPE_VLAN_IP_OFFSET);
             break;
         default:
             errh->error(
@@ -407,7 +402,7 @@ SimpleEthernetClassifier::find_offset(
 {
     HashTable<unsigned short, unsigned short> offsets = _tc_to_offset->find(label).value();
 
-    if ( offsets.empty() ) {
+    if (offsets.empty()) {
         errh->error(
             "Primary offset for %s is not found",
             label.c_str()
@@ -424,7 +419,7 @@ SimpleEthernetClassifier::add_subclass(
 {
     int sec_proto = 0;
     int got = NameInfo::query_int(NameInfo::T_ETHERNET_TYPES_TO_HEX, 0, label, &sec_proto);
-    if ( !got ) {
+    if (!got) {
         errh->error(
             "Failed to retrieve the hex type of %s",
             label.c_str()
@@ -444,58 +439,69 @@ SimpleEthernetClassifier::add_subclass(
 int
 SimpleEthernetClassifier::process(int, Packet *p)
 {
+    int output_port = -1;
+    String proto, label;
+    Vector<TreeNode *> children;
+
     const click_ether *eth = reinterpret_cast<const click_ether *>(p->data());
     uint16_t eth_type = ntohs(eth->ether_type);
 
     // Find which node of the tree should handle this traffic class
     TreeNode *parent = _eth_type_to_tree_node->find(eth_type).value();
-    if ( !parent ) {
-        click_chatter("Unsupported packet type");
-        _dropped_packets++;
-        return -1;
+    if (!parent) {
+        goto no_match;
     }
-
-    // Extract both the traffic class label and the protocol
-    String label = _eth_type_to_tc_label->find(eth_type).value();
-    String proto = _eth_type_to_tc_proto->find(eth_type).value();
 
     // Increment the pkt_count even if the parent traffic class is not an exact match
     parent->increment_pkt_count();
 
-    // This is an exact match
-    if ( (parent->get_children_nb() == 0) && (parent->get_active()) ) {
+    // This is an exact match, we are done
+    if ((parent->get_children_nb() == 0) && (parent->get_active())) {
         return parent->get_output_port();
     }
 
+    // Extract the traffic class of the protocol
+    proto = _eth_type_to_tc_proto->find(eth_type).value();
+    // Label might be more specific than protocol, but we start abstract
+    label = proto;
+
     // We descend the tree to find an exact match
-    TreeNode *child = parent->exact_lookup_from_parent(label, proto, parent);
-    if ( !child ) {
-        click_chatter("Unsupported packet type");
+    children = parent->exact_lookup_from_parent(label, proto, parent);
+    if (children.empty()) {
+        goto no_match;
+    }
+
+    for (auto child : children) {
+        uint16_t next_field;
+
+        // Find the next offset in the header to perform a match
+        const unsigned char *next_offset = p->data() + child->get_header_offset();
+
+        // Keep the header field at this offset
+        memcpy((void *)(&next_field), next_offset, sizeof(uint16_t));
+        next_field = ntohs(next_field);
+
+        // Exact match
+        if (next_field == child->get_header_value()) {
+            output_port = child->get_output_port();
+            if (output_port >= 0) {
+                child->increment_pkt_count();
+                return output_port;
+            }
+        }
+    }
+
+    no_match:
         _dropped_packets++;
+        click_chatter("Unsupported Ethernet type: %x", eth_type);
         return -1;
-    }
-
-    // Find the next offset in the header to perform a match
-    uint16_t next_field;
-    const unsigned char *next_offset = p->data() + child->get_header_offset();
-    memcpy((void *)(&next_field), next_offset, sizeof(uint16_t));
-    next_field = ntohs(next_field);
-
-    // Exact match
-    if ( next_field == child->get_header_value() ) {
-        child->increment_pkt_count();
-        return child->get_output_port();
-    }
-
-    _dropped_packets++;
-    return -1;
 }
 
 void
 SimpleEthernetClassifier::push(int port, Packet *p)
 {
     int output_port = process(port, p);
-    if ( output_port < 0 ) {
+    if (output_port < 0) {
         p->kill();
         return;
     }
@@ -507,72 +513,18 @@ SimpleEthernetClassifier::push(int port, Packet *p)
 void
 SimpleEthernetClassifier::push_batch(int port, PacketBatch *batch)
 {
-    unsigned short outports = noutputs();
-    PacketBatch *out[outports];
-    bzero(out, sizeof(PacketBatch *) *outports);
-    PacketBatch *next = ((batch != NULL)? static_cast<PacketBatch*>(batch->next()) : NULL );
-    PacketBatch *p = batch;
-    PacketBatch *last = NULL;
-    int last_o = -1;
-    int passed = 0;
-    int count  = 0;
-
-    for ( ;p != NULL; p=next,next=(p==0? 0:static_cast<PacketBatch *>(p->next())) ) {
-        // The actual job of this element
-        int o = process(port, p);
-
-        if (o < 0 || o>=(outports)) o = (outports - 1);
-
-        if (o == last_o) {
-            passed ++;
-        }
-        else {
-            if ( !last ) {
-                out[o] = p;
-                p->set_count(1);
-                p->set_tail(p);
-            }
-            else {
-                out[last_o]->set_tail(last);
-                out[last_o]->set_count(out[last_o]->count() + passed);
-                if (!out[o]) {
-                    out[o] = p;
-                    out[o]->set_count(1);
-                    out[o]->set_tail(p);
-                }
-                else {
-                    out[o]->append_packet(p);
-                }
-                passed = 0;
-            }
-        }
-        last = p;
-        last_o = o;
-        count++;
-    }
-
-    if (passed) {
-        out[last_o]->set_tail(last);
-        out[last_o]->set_count(out[last_o]->count() + passed);
-    }
-
-    int i = 0;
-    for (; i < outports; i++) {
-        if (out[i]) {
-            out[i]->tail()->set_next(NULL);
-            checked_output_push_batch(i, out[i]);
-        }
-    }
+    auto fnt = [this, port] (Packet *p) { return process(port, p); };
+    CLASSIFY_EACH_PACKET(noutputs() + 1, fnt, batch, checked_output_push_batch);
 }
 #endif
 
-uint16_t
-SimpleEthernetClassifier::get_dropped_packets()
+uint64_t
+SimpleEthernetClassifier::dropped_packets_nb()
 {
     return _dropped_packets;
 }
 
-uint16_t
+uint64_t
 SimpleEthernetClassifier::matched_packets_nb()
 {
     uint64_t pkt_count = 0;
@@ -581,9 +533,39 @@ SimpleEthernetClassifier::matched_packets_nb()
 }
 
 void
-SimpleEthernetClassifier::reset_matched_packets()
+SimpleEthernetClassifier::print_debug_info()
+{
+    click_chatter("\nEthernet type --> Proto");
+    for (HashTable<unsigned short, String>::const_iterator it = _eth_type_to_tc_proto->begin();
+            it != _eth_type_to_tc_proto->end(); ++it) {
+        click_chatter("Eth type: %x --> Proto: %s", it.key(), it.value().c_str());
+    }
+
+    click_chatter("\nEthernet type --> Tree node");
+    for (HashTable<unsigned short, TreeNode *>::const_iterator it = _eth_type_to_tree_node->begin();
+            it != _eth_type_to_tree_node->end(); ++it) {
+        click_chatter("Eth type: %x --> Tree node: %s", it.key(), it.value()->get_label().c_str());
+    }
+
+    for (HashTable<String, HashTable<unsigned short, unsigned short>>::const_iterator
+                it = _tc_to_offset->begin();
+                it != _tc_to_offset->end(); ++it) {
+        for (HashTable<unsigned short, unsigned short>::const_iterator
+                it2 = it.value().begin();
+                it2 != it.value().end(); ++it2) {
+            click_chatter("Traffic class: %s --> Offset: %d", it.key().c_str(), it2.value());
+        }
+    }
+    click_chatter("");
+}
+
+int
+SimpleEthernetClassifier::reset_packet_counts()
 {
     _root->reset_matched_packets();
+    _dropped_packets = 0;
+
+    return 0;
 }
 
 static String
@@ -597,15 +579,14 @@ static String
 dropped_handler(Element *e, void *)
 {
     SimpleEthernetClassifier *sec = static_cast<SimpleEthernetClassifier *>(e);
-    return String(sec->get_dropped_packets());
+    return String(sec->dropped_packets_nb());
 }
 
 static int
 reset_count_handler(const String &, Element *e, void *, ErrorHandler *)
 {
     SimpleEthernetClassifier *sec = static_cast<SimpleEthernetClassifier *>(e);
-    sec->reset_matched_packets();
-    return 0;
+    return sec->reset_packet_counts();
 }
 
 void

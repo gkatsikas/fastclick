@@ -96,13 +96,13 @@ class TreeNode {
     }
 
     void delete_node() {
-        if ( this->get_children_nb() == 0 ) {
+        if (this->get_children_nb() == 0) {
             return;
         }
 
         for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
             TreeNode *child = this->children.at(child_no);
-            if ( child->get_children_nb() == 0 ) {
+            if (child->get_children_nb() == 0) {
                 delete child;
             }
             else {
@@ -183,7 +183,7 @@ class TreeNode {
         return this->active;
     }
 
-    Vector<TreeNode*> get_children() {
+    Vector<TreeNode *> get_children() {
         return this->children;
     }
 
@@ -196,17 +196,18 @@ class TreeNode {
             short          output_port) {
         // The node to be added
         TreeNode *child = new TreeNode(
-            label, protocol, header_offset, header_length, header_value, output_port
+            label, protocol, header_offset,
+            header_length, header_value, output_port
         );
 
         // Same basic protocol and label, do not duplicate this node
         TreeNode *exists = this->base_lookup(protocol);
-        if ( exists && label.equals(protocol) ) {
+        if (exists && label.equals(protocol)) {
             delete child;
             return NULL;
         }
-        // Same basic protocol, but different label -> add the new one as its child
-        else if ( exists ) {
+        // Same basic protocol, different label -> add as its child
+        else if (exists) {
             exists->children.push_back(child);
         }
         // Otherwise, create a new child node at this one
@@ -218,13 +219,14 @@ class TreeNode {
     }
 
     TreeNode *base_lookup(String protocol) {
-        if ( get_protocol().equals(protocol) ) {
+        if (get_protocol().equals(protocol)) {
             return this;
         }
 
-        for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < this->get_children_nb(); child_no++) {
             TreeNode *child = this->children.at(child_no);
-            if ( child->get_protocol().equals(protocol) ) {
+            if (child->get_protocol().equals(protocol)) {
                 return child;
             }
         }
@@ -235,7 +237,7 @@ class TreeNode {
 
     TreeNode *exact_lookup(String label, String protocol) {
         TreeNode *parent = base_lookup(protocol);
-        if ( !parent ) {
+        if (!parent) {
             click_chatter(
                 "No exact match for protocol %s and label %s",
                 protocol.c_str(), label.c_str()
@@ -243,10 +245,11 @@ class TreeNode {
             return NULL;
         }
 
-        for (unsigned short child_no = 0; child_no < parent->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < parent->get_children_nb(); child_no++) {
             TreeNode *child = parent->children.at(child_no);
-            if ( child->get_label().equals(label) &&
-                 child->get_protocol().equals(protocol) ) {
+            if (child->get_label().equals(label) &&
+                 child->get_protocol().equals(protocol)) {
                 return child;
             }
         }
@@ -258,40 +261,45 @@ class TreeNode {
         return NULL;
     }
 
-    TreeNode *exact_lookup_from_parent(String label, String protocol, TreeNode *parent) {
-        if ( !parent ) {
-            click_chatter(
-                "No exact match for protocol %s and label %s",
-                protocol.c_str(), label.c_str()
-            );
-            return NULL;
+    Vector<TreeNode *>exact_lookup_from_parent(
+            String label, String protocol, TreeNode *parent) {
+        Vector<TreeNode *> children;
+
+        if (!parent) {
+            click_chatter("No exact match for protocol %s", label.c_str());
+            return children;
         }
 
-        if ( parent->get_label().equals(label) &&
-             parent->get_protocol().equals(protocol) ) {
-            return parent;
+        // Parent has what we want
+        if (parent->get_label().equals(label) &&
+            parent->get_protocol().equals(protocol) &&
+            parent->get_active()) {
+            children.push_back(parent);
+            return children;
         }
 
-        for (unsigned short child_no = 0; child_no < parent->get_children_nb(); child_no++) {
+        // Ok, let's see if the children can match some part
+        for (unsigned short child_no = 0;
+                child_no < parent->get_children_nb(); child_no++) {
             TreeNode *child = parent->children.at(child_no);
-            if ( child->get_label().equals(label) &&
-                 child->get_protocol().equals(protocol) ) {
-                return child;
+
+            // Partial match works here
+            if ((child->get_label().find_left(label) >= 0) &&
+                child->get_protocol().equals(protocol) &&
+                child->get_active()) {
+                children.push_back(child);
             }
         }
 
-        click_chatter(
-            "No exact match for protocol %s and label %s",
-            protocol.c_str(), label.c_str()
-        );
-        return NULL;
+        return children;
     }
 
-    Vector<TreeNode *> fetch_traffic_patterns(String label, String protocol) {
+    Vector<TreeNode *> fetch_traffic_patterns(
+            String label, String protocol) {
         Vector<TreeNode *> nodes;
 
         TreeNode *parent = this->base_lookup(protocol);
-        if ( !parent ) {
+        if (!parent) {
             click_chatter(
                 "No traffic patterns for protocol %s and label %s",
                 protocol.c_str(), label.c_str()
@@ -303,13 +311,15 @@ class TreeNode {
         nodes.push_back(parent);
 
         // If no node matches your base protocol, then no luck
-        if ( parent->get_label().equals(protocol) ) {
+        if (parent->get_label().equals(protocol)) {
             return nodes;
         }
 
-        nodes.push_back(
-            this->exact_lookup_from_parent(label, protocol, parent)
-        );
+        for (auto child :
+                this->exact_lookup_from_parent(label, protocol, parent)
+        ) {
+            nodes.push_back(child);
+        }
 
         return nodes;
     }
@@ -322,39 +332,43 @@ class TreeNode {
 
     void activate(Vector<String> &traffic_classes) {
         // Check if this node's label exists in the user's configuration
-        for ( String tc : traffic_classes ) {
-            if ( tc.equals(this->get_label()) ) {
+        for (String tc : traffic_classes) {
+            if (tc.equals(this->get_label())) {
                 this->set_active(true);
+                break;
             }
         }
 
         // Ensure that inactive elements do not have a valid output port
-        if ( !this->get_active() ) {
+        if (!this->get_active()) {
             this->set_output_port(-1);
         }
 
         // Visit all the children recursively
-        for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < this->get_children_nb(); child_no++) {
             this->children.at(child_no)->activate(traffic_classes);
         }
     }
 
     void matched_packets_nb(uint64_t &pkt_count) {
-        if ( this->get_active() ) {
+        if (this->get_active()) {
             pkt_count += this->get_pkt_count();
         }
 
-        for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < this->get_children_nb(); child_no++) {
            this->children.at(child_no)->matched_packets_nb(pkt_count);
         }
     }
 
     void reset_matched_packets() {
-        if ( this->get_active() ) {
+        if (this->get_active()) {
             this->set_pkt_count(0);
         }
 
-        for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < this->get_children_nb(); child_no++) {
            this->children.at(child_no)->reset_matched_packets();
         }
     }
@@ -366,7 +380,8 @@ class TreeNode {
         click_chatter("  Header Offset: %d",   get_header_offset());
         click_chatter("   Field Length: %d",   get_header_length());
         click_chatter("          Value: %04x", get_header_value());
-        click_chatter("      Value Str: %s",   header_value_to_str(get_header_value()).c_str());
+        click_chatter("      Value Str: %s",   header_value_to_str(
+            get_header_value()).c_str());
         click_chatter("       Out Port: %d",   get_output_port());
         click_chatter("       Children: %d",   get_children_nb());
         click_chatter("         Active: %s",   get_active() ? "yes":"no");
@@ -374,7 +389,8 @@ class TreeNode {
         click_chatter("============================================");
         click_chatter("\n");
 
-        for (unsigned short child_no = 0; child_no < this->get_children_nb(); child_no++) {
+        for (unsigned short child_no = 0;
+                child_no < this->get_children_nb(); child_no++) {
            this->children.at(child_no)->print_node();
         }
     }
@@ -399,19 +415,11 @@ class SimpleEthernetClassifier : public BatchElement {
     int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
     void add_handlers() CLICK_COLD;
 
-    bool is_supported_by_click(int tc_type_idx);
-    bool create_patterns(String label, int tc_type_idx, ErrorHandler *errh);
-    unsigned short find_offset(String label, unsigned short proto, ErrorHandler *errh);
-
-    TreeNode *add_subclass(
-        String label, String protocol, short port_no, ErrorHandler *errh
-    );
-
     int process(int port, Packet *p);
 
-    uint16_t get_dropped_packets();
-    uint16_t matched_packets_nb();
-    void reset_matched_packets();
+    uint64_t dropped_packets_nb();
+    uint64_t matched_packets_nb();
+    int reset_packet_counts();
 
 #if HAVE_BATCH
     void push_batch(int, PacketBatch *);
@@ -419,10 +427,12 @@ class SimpleEthernetClassifier : public BatchElement {
     void push(int, Packet *);
 
   private:
+    bool _debug_mode;
     bool _verbose;
     bool _has_wildcard;
 
-    uint16_t _dropped_packets;
+
+    uint64_t _dropped_packets;
 
     /**
      * A shallow classification tree
@@ -440,9 +450,44 @@ class SimpleEthernetClassifier : public BatchElement {
      * and the classification nodes of the tree
      */
     HashTable<String, HashTable<unsigned short, unsigned short>> *_tc_to_offset;
-    HashTable<unsigned short, String>     *_eth_type_to_tc_label;
+
+    /**
+     * Keep mappings between Ethernet types and their
+     * protocols and tree node halnders.
+     */
     HashTable<unsigned short, String>     *_eth_type_to_tc_proto;
     HashTable<unsigned short, TreeNode *> *_eth_type_to_tree_node;
+
+    /**
+     * Some protocols are not supported by Click.
+     */
+    bool is_supported_by_click(int tc_type_idx);
+
+    /**
+     * Populate data structures with necessary information.
+     */
+    bool create_patterns(
+        String label, int tc_type_idx, ErrorHandler *errh
+    );
+
+    /**
+     * Find th header offset of a specific protocol.
+     */
+    unsigned short find_offset(
+        String label, unsigned short proto, ErrorHandler *errh
+    );
+
+    /**
+     * Create a subclass for an existing traffic class.
+     */
+    TreeNode *add_subclass(
+        String label, String protocol, short port_no, ErrorHandler *errh
+    );
+
+    /**
+     * Print internal data structures for debugging.
+     */
+    void print_debug_info();
 };
 
 CLICK_ENDDECLS
