@@ -167,22 +167,22 @@ struct IPRoute {
     int32_t port;
     int32_t extra;
 
-    IPRoute()			: port(-1) { }
+    IPRoute()           : port(-1) { }
     IPRoute(IPAddress a, IPAddress m, IPAddress g, int p)
-				: addr(a), mask(m), gw(g), port(p) { }
+                : addr(a), mask(m), gw(g), port(p) { }
 
-    inline bool real() const	{ return port > (int32_t) -0x80000000; }
-    inline void kill()		{ addr = 0; mask = 0xFFFFFFFFU; port = -0x80000000; }
+    inline bool real() const    { return port > (int32_t) -0x80000000; }
+    inline void kill()      { addr = 0; mask = 0xFFFFFFFFU; port = -0x80000000; }
     inline bool contains(IPAddress a) const;
     inline bool contains(const IPRoute& r) const;
     inline bool mask_as_specific(IPAddress m) const;
     inline bool mask_as_specific(const IPRoute& r) const;
     inline bool match(const IPRoute& r) const;
-    int prefix_len() const	{ return mask.mask_to_prefix_len(); }
+    int prefix_len() const  { return mask.mask_to_prefix_len(); }
 
     StringAccum &unparse(StringAccum&, bool tabs) const;
     String unparse() const;
-    String unparse_addr() const	{ return addr.unparse_with_mask(mask); }
+    String unparse_addr() const { return addr.unparse_with_mask(mask); }
 };
 
 class IPRouteTable : public BatchElement { public:
@@ -196,9 +196,9 @@ class IPRouteTable : public BatchElement { public:
     virtual int lookup_route(IPAddress addr, IPAddress& gw) const = 0;
     virtual String dump_routes();
 
-    void push      (int, Packet      *p);
+    void push(int, Packet      *p);
 #if HAVE_BATCH
-    void push_batch(int, PacketBatch *batch);
+    void push_batch (int, PacketBatch *batch);
 #endif
 
     static int add_route_handler(const String&, Element*, void*, ErrorHandler*);
@@ -251,7 +251,7 @@ inline bool
 IPRoute::match(const IPRoute& r) const
 {
     return addr == r.addr && mask == r.mask
-	&& (port < 0 || (gw == r.gw && port == r.port));
+    && (port < 0 || (gw == r.gw && port == r.port));
 }
 
 CLICK_ENDDECLS

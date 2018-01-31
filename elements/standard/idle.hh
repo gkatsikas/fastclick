@@ -1,9 +1,7 @@
 #ifndef CLICK_IDLE_HH
 #define CLICK_IDLE_HH
-
 #include <click/batchelement.hh>
 #include <click/notifier.hh>
-
 CLICK_DECLS
 
 /*
@@ -28,25 +26,23 @@ CLICK_DECLS
  * =sa SimpleIdle
  */
 
-class Idle : public BatchElement { public:
+class Idle : public BatchElement {
+
+  public:
 
   Idle() CLICK_COLD;
 
-  const char *class_name() const override	{ return "Idle"; }
-  const char *port_count() const override	{ return "-/-"; }
-  const char *processing() const override	{ return "a/a"; }
-  const char *flow_code() const override		{ return "x/y"; }
+  const char *class_name() const override { return "Idle"; }
+  const char *port_count() const override { return "-/-"; }
+  const char *processing() const override { return "a/a"; }
+  const char *flow_code() const  override { return "x/y"; }
   void *cast(const char *);
-  const char *flags() const		{ return "S0"; }
+  const char *flags() const   { return "S0"; }
 
-  void push      (int, Packet      *);
+  void push(int, Packet *);
+  Packet *pull(int);
 #if HAVE_BATCH
   void push_batch(int, PacketBatch *);
-#endif
-
-  Packet      *pull      (int);
-#if HAVE_BATCH
-  PacketBatch *pull_batch(int);
 #endif
 
   private:
