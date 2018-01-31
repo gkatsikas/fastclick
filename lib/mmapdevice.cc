@@ -28,7 +28,6 @@
 #include <netinet/ip_icmp.h>  /* iphdr, icmphdr */
 
 #include <click/config.h>
-#include <click/packet.hh>
 #include <click/mmapdevice.hh>
 
 CLICK_DECLS
@@ -504,11 +503,11 @@ MMapDevice::walk_tx_ring_batch(const String ifname, struct ring *ring, PacketBat
 
 	size_t packet_len;
 	counter_t sent_pkts  = 0, sent_bytes = 0;
-	const unsigned short burst_size = batch->count();
+	const unsigned burst_size = batch->count();
 
 	// Where are we in the ring?
 	unsigned int frame_num = ring->tx_rd_idx;
-	Packet* current = batch;
+	Packet *current = batch;
 
 //	click_chatter("[%s] [Tx thread] Ring %p to transmit %d packets\n", ifname.c_str(), ring, burst_size);
 

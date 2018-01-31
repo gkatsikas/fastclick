@@ -257,7 +257,7 @@ ToMMapDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 #endif
 
 void
-ToMMapDevice::push_packet(int port, Packet *p)
+ToMMapDevice::push(int port, Packet *p)
 {
 	if ( !p )
 		return;
@@ -306,7 +306,7 @@ ToMMapDevice::push_packet(int port, Packet *p)
 
 	// Time to kill
 	if ( likely(is_fullpush()) ) {
-		p->safe_kill();
+		p->kill_nonatomic();
 	}
 	else {
 		p->kill();
@@ -338,7 +338,7 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 			}
 			next = p->next();
 
-			BATCH_RECYCLE_UNSAFE_PACKET(p);
+			BATCH_RECYCLE_PACKET_CONTEXT(p);
 
 			p = next;
 		}
@@ -367,7 +367,7 @@ void ToMMapDevice::push_batch(int, PacketBatch *head)
 	// If non-blocking, drop all packets that could not be sent
 	while ( p ) {
 		next = p->next();
-		BATCH_RECYCLE_UNSAFE_PACKET(p);
+		BATCH_RECYCLE_PACKET_CONTEXT(p);
 		p = next;
 		++_n_dropped;
 	}

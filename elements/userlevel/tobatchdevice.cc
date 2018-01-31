@@ -310,7 +310,7 @@ ToBatchDevice::flush_internal_tx_queue_batch(TXInternalQueue &iqueue)
 #endif
 
 void
-ToBatchDevice::push_packet(int, Packet *p)
+ToBatchDevice::push(int, Packet *p)
 {
 	if ( !p )
 		return;
@@ -359,7 +359,7 @@ ToBatchDevice::push_packet(int, Packet *p)
 
 	// Time to kill
 	if ( likely(is_fullpush()) ) {
-		p->safe_kill();
+		p->kill_nonatomic();
 	}
 	else {
 		p->kill();
@@ -392,7 +392,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 			}
 			next = p->next();
 
-			BATCH_RECYCLE_UNSAFE_PACKET(p);
+			BATCH_RECYCLE_PACKET_CONTEXT(p);
 
 			p = next;
 		}
@@ -421,7 +421,7 @@ ToBatchDevice::push_batch(int, PacketBatch *head)
 	// If non-blocking, drop all packets that could not be sent
 	while ( p ) {
 		next = p->next();
-		BATCH_RECYCLE_UNSAFE_PACKET(p);
+		BATCH_RECYCLE_PACKET_CONTEXT(p);
 		p = next;
 		++_n_dropped;
 	}

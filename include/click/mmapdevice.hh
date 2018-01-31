@@ -11,6 +11,10 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 
+#include <click/packetbatch.hh>
+
+CLICK_DECLS
+
 #define COOKED_PACKET
 #undef  P_8021Q
 
@@ -182,8 +186,6 @@ union frame_map {
 #else
 	typedef uint32_t counter_t;
 #endif
-
-CLICK_DECLS
 
 class MMapDevice {
 	public:

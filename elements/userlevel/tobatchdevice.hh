@@ -120,7 +120,7 @@ class ToBatchDevice : public BatchElement {
 		String ifname() const 	{ return _ifname; }
 		int        fd() const 	{ return _fd; }
 
-		void push_packet(int port, Packet      *);
+		void push       (int port, Packet      *);
 	#if HAVE_BATCH
 		void push_batch (int port, PacketBatch *);
 	#endif

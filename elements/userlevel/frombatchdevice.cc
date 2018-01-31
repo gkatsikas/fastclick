@@ -295,7 +295,7 @@ FromBatchDevice::selected(int, int)
 
 	// Ask for a batch of packets with a single syscall.
 	int pkts_no = recvmmsg(_fd, _msgs, _burst_size, 0, NULL);
-	//click_chatter("[%s] [%s] %4d packets received", name().c_str(), _ifname.c_str(), pkts_no);
+	// click_chatter("[%s] [%s] %4d packets received", name().c_str(), _ifname.c_str(), pkts_no);
 
 	// Something went wrong. Release the memory and re-schedule
 	if ( pkts_no == -1 ) {
@@ -318,8 +318,10 @@ FromBatchDevice::selected(int, int)
 		_pkts[i]->set_packet_type_anno(Packet::HOST);
 		_pkts[i]->set_mac_header(_pkts[i]->data());
 
-		//click_chatter("[%s] [%s] Packet with size %d",
-		//		name().c_str(), _ifname.c_str(), _pkts[i]->length());
+		// click_chatter(
+		// 	"[%s] [%s] Packet with size %d",
+		// 	name().c_str(), _ifname.c_str(), _pkts[i]->length()
+		// );
 
 	#if HAVE_BATCH
 		// Build-up the batch packet-by-packet
