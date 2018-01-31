@@ -382,7 +382,7 @@ MMapDevice::close_socket(const String ifname, struct ring *ring)
 		ring->sock_fd = -1;
 
 		if ( _verbose )
-			click_chatter("[%s] [Close Socket] Done", ifname.c_str());
+			click_chatter("\n[%s] [Close Socket] Done", ifname.c_str());
 	}
 
 	return 0;

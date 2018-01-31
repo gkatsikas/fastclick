@@ -59,6 +59,12 @@ FromBatchDevice::FromBatchDevice() :
 
 FromBatchDevice::~FromBatchDevice()
 {
+	if (_verbose) {
+		click_chatter(
+			"\n[%s] [%s] Received: %" PRIu64 "",
+			name().c_str(), _ifname.c_str(), _n_recv
+		);
+	}
 }
 
 int

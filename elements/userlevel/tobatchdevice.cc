@@ -45,6 +45,12 @@ ToBatchDevice::ToBatchDevice() :
 
 ToBatchDevice::~ToBatchDevice()
 {
+	if (_verbose) {
+		click_chatter(
+			"\n[%s] [%s] Sent: %" PRIu64 " - Dropped: %" PRIu64 "",
+			name().c_str(), _ifname.c_str(), _n_sent, _n_dropped
+		);
+	}
 }
 
 int

@@ -36,8 +36,12 @@ FromMMapDevice::FromMMapDevice() :
 
 FromMMapDevice::~FromMMapDevice()
 {
-	if ( _verbose && _debug )
-		click_chatter("[%s] Read: %7d packets", _ifname.c_str(), _n_recv);
+	if (_verbose) {
+		click_chatter(
+			"\n[%s] [%s] Received: %" PRIu64 "",
+			name().c_str(), _ifname.c_str(), _n_recv
+		);
+	}
 }
 
 int
