@@ -71,10 +71,11 @@ IPMapper::rewrite_flowid(IPRewriterInput *, const IPFlowID &, IPFlowID &,
 //
 
 IPRewriterBase::IPRewriterBase()
-    : _state(), _set_aggregate(false)
+    : _state(), _set_aggregate(false),
     _drop_bcast(false), _ipgw_opt(false), _fix_ip_src(false),
     _ip_fragment(false), _dec_ip_ttl(false), _calc_checksum(true),
-    _my_ip(), _mtu(1500), _headroom(Packet::default_headroom),
+    _ip_out_combo(false), _my_ip(), _mtu(1500),
+    _headroom(Packet::default_headroom),
     _honor_df(true), _verbose(false)
 {
     _gc_interval_sec = default_gc_interval;
